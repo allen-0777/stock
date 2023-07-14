@@ -55,6 +55,7 @@ def get_data(max_attempts=5):
     return df
 
 # @st.cache_data
+@st.cache_data(ttl=3600)
 def three_data():
     # 發送GET請求到URL並獲取JSON回應
     response = requests.get("https://www.twse.com.tw/rwd/zh/fund/BFI82U?response=json&_=1687055087413")
@@ -81,6 +82,7 @@ def three_data():
     return new_df
 
 # @st.cache_data
+@st.cache_data(ttl=3600)
 def turnover():
     now = datetime.now()
     datestr = now.strftime("%Y%m%d")
@@ -107,6 +109,7 @@ def turnover():
     return new_df
 
 # @st.cache_data
+@st.cache_data(ttl=3600)
 def for_buy_sell():
     df = get_data()
     df_for = df[['證券代號','證券名稱','外陸資買賣超股數(不含外資自營商)']].copy()
@@ -120,6 +123,7 @@ def for_buy_sell():
     return df_for_all, df_buy_top50, df_sell_top50
 
 # @st.cache_data
+@st.cache_data(ttl=3600)
 def ib_buy_sell():
     df = get_data()
     df_ib = df[['證券代號','證券名稱','投信買賣超股數']].copy()
