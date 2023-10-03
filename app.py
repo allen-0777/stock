@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from data import *
-# 假設你已經有了一個叫做 data 的物件，並且它有一個方法叫做 data() 可以返回一個 dataframe
+import plotly.graph_objects as go
 # data = SomeObject()
 st.set_page_config(layout="wide")
 
@@ -13,30 +13,33 @@ def main():
     # if selection == "籌碼":
         # st.header("籌碼分析")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["每日盤後資訊", "外資投信同買", "外資買賣超", "投信買賣超"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["每日盤後資訊", "外資投信同買", "外資買賣超", "投信買賣超","台幣匯率"])
     with tab1:
         st.subheader("三大法人")
-        df_three = three_data().reset_index(drop=True)  # 呼叫 data.data() 並獲取 dataframe
-        st.dataframe(df_three)  # 顯示 dataframe
+        df_three , data_date = three_data()
+        df_three = df_three.reset_index(drop=True)  
+        st.write(f"數據日期：{data_date}")
+        st.dataframe(df_three)  
         st.subheader("成交量")
         df_turnover = turnover()
         df_turnover.set_index('日期', inplace=True)
         st.bar_chart(df_turnover['成交量'])
 
     with tab2:
-        df_com_buy = for_ib_common()
+        df_com_buy, data_date = for_ib_common()
+        st.write(f"數據日期：{data_date}")
         st.dataframe(df_com_buy)
         
     with tab3:
         # st.header("自營商")
-        # 在Streamlit中获取两个DataFrame
-        _, df_buy_top50, df_sell_top50 = for_buy_sell()
+        _, df_buy_top50, df_sell_top50, data_date = for_buy_sell()
         df_buy_top50 = df_buy_top50.reset_index(drop=True)
         df_buy_top50.index = df_buy_top50.index + 1
 
         df_sell_top50 = df_sell_top50.reset_index(drop=True)
         df_sell_top50.index = df_sell_top50.index + 1
-        # 在Streamlit中显示这两个DataFrame
+        st.write(f"數據日期：{data_date}")
+
         st.subheader("外資買超前50:")
         st.dataframe(df_buy_top50)
 
@@ -44,21 +47,43 @@ def main():
         st.dataframe(df_sell_top50)
 
     with tab4:
-        _, df_buy_top50, df_sell_top50 = ib_buy_sell()
+        _, df_buy_top50, df_sell_top50, data_date = ib_buy_sell()
         df_buy_top50 = df_buy_top50.reset_index(drop=True)
         df_buy_top50.index = df_buy_top50.index + 1
 
         df_sell_top50 = df_sell_top50.reset_index(drop=True)
         df_sell_top50.index = df_sell_top50.index + 1
-        # 在Streamlit中显示这两个DataFrame
+        st.write(f"數據日期：{data_date}")
+
         st.subheader("投信買超前50:")
         st.dataframe(df_buy_top50)
 
         st.subheader("投信賣超前50:")
         st.dataframe(df_sell_top50)
 
+    with tab5:
+        History_ExchangeRate = exchange_rate()
+        fig = go.Figure()
 
-        # selected_date = st.date_input("篩選時間")
+        # 添加買入和賣出的線圖
+        fig.add_trace(go.Scatter(x=History_ExchangeRate.index, 
+                                y=History_ExchangeRate['buy_rate'], 
+                                mode='lines+markers',
+                                name='買進匯率'))
+        fig.add_trace(go.Scatter(x=History_ExchangeRate.index, 
+                                y=History_ExchangeRate['sell_rate'], 
+                                mode='lines+markers',
+                                name='賣出匯率'))
+        
+        # 設定 Y 軸的範圍
+        fig.update_layout(yaxis_range=[30,33.5])
+        
+        # 使用 streamlit 顯示圖表
+        st.plotly_chart(fig)
+        
+        # 顯示數據表
+        st.write(History_ExchangeRate.sort_index(ascending=False))
+
 
     # elif selection == "其他":
     #     st.header("其他分析")
