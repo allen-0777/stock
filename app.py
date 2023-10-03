@@ -84,6 +84,7 @@ def main():
         # 顯示數據表
         st.write(History_ExchangeRate.sort_index(ascending=False))
 
+        # selected_date = st.date_input("篩選時間")
 
     # elif selection == "其他":
     #     st.header("其他分析")

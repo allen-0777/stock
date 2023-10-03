@@ -220,4 +220,3 @@ def format_number(num_str):
     num_float = float(num_str)
     num_rounded = round(num_float / 1e8, 1)
     return num_rounded
-
