@@ -215,6 +215,39 @@ def exchange_rate():
     # print(History_ExchangeRate)
     return History_ExchangeRate
 
+def futures():
+    url = 'https://www.taifex.com.tw/cht/3/futContractsDate'
+
+    # 使用read_html解析
+    tables = pd.read_html(url)
+    df = tables[2]
+    df = df.dropna(how='all', axis=0).dropna(how='all', axis=1)
+
+    # 自訂欄位名稱
+    headers = [
+        "序號", "商品名稱", "身份別",
+        "多方口數", "多方交易契約金額",
+        "空方口數", "空方契約金額",
+        "多空淨額口數", "多空淨額契約金額",
+        "多方未平倉口數", "多方未平倉契約金額",
+        "空方未平倉口數", "空方未平倉契約金額",
+        "多空淨額未平倉口數", "多空淨額未平倉契約金額"
+    ]
+
+    df.columns = headers
+    df = df[5:].reset_index(drop=True)
+
+    # 使用新的列名稱進行過濾
+    df = df[~df['序號'].str.contains('期貨合計|期貨小計|序 號', na=False)]
+    df = df[df['商品名稱'] == '臺股期貨']
+
+    selected_columns = ["多空淨額未平倉口數", "多空淨額未平倉契約金額"]
+    df = df.loc[:, selected_columns]
+
+    new_index = ["自營商", "投信", "外資"]
+    df.index = new_index
+    return df
+
 def format_number(num_str):
     num_str = num_str.replace(",", "")
     num_float = float(num_str)
