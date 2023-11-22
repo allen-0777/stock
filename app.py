@@ -6,6 +6,13 @@ import plotly.graph_objects as go
 st.set_page_config(layout="wide")
 
 def main():
+    with st.form(key='my_form'):
+        input_value = st.text_input(label='请输入股票代号')
+        submit_button = st.form_submit_button(label='提交')
+
+    if submit_button:
+        target_url = f"https://norway.twsthr.info/StockHolders.aspx?stock={input_value}"
+        st.markdown(f"[ {input_value} 的神秘金字塔]({target_url})")
     # 創建側邊欄
     # selection = st.sidebar.radio("選擇頁面", ["籌碼", "其他"])
 
