@@ -7,8 +7,8 @@ st.set_page_config(layout="wide")
 
 def main():
     with st.form(key='my_form'):
-        input_value = st.text_input(label='请输入股票代号')
-        submit_button = st.form_submit_button(label='提交')
+        input_value = st.text_input(label='請輸入股票代號')
+        submit_button = st.form_submit_button(label='查詢')
 
     if submit_button:
         target_url = f"https://norway.twsthr.info/StockHolders.aspx?stock={input_value}"
