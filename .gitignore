@@ -1,0 +1,11 @@
+# Ignore Jupyter Notebook files
+test.ipynb
+
+# Ignore all __pycache__ directories
+__pycache__/
+
+# Ignore specific Python file
+good.py
+
+# Ignore virtual environment directory
+myenv/
