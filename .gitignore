@@ -7,5 +7,10 @@ __pycache__/
 # Ignore specific Python file
 good.py
 
-# Ignore virtual environment directory
+# Ignore virtual environment directories
 myenv/
+venv/
+
+# Ignore Python bytecode
+*.pyc
+*.pyo
