@@ -125,6 +125,3 @@ http://localhost:8501
 
 歡迎提交 Issue 或 Pull Request 來幫助改進這個項目。如有任何建議或問題，請聯繫我。
 
-## 授權協議
-
-本項目基於 MIT 授權協議開源，詳情請參閱 [LICENSE](LICENSE) 文件。
