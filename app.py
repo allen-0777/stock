@@ -194,7 +194,7 @@ def main():
         
         # 添加進度條
         with st.spinner("正在加載三大法人數據..."):
-            df_three, data_date = three_data()
+            df_three, data_date = cached_three_data()
         
         if not df_three.empty:
             df_three = df_three.reset_index(drop=True)  
@@ -227,7 +227,7 @@ def main():
         
         st.markdown("<div class='sub-header'>外資未平倉</div>", unsafe_allow_html=True)
         with st.spinner("正在加載期貨數據..."):
-            df_futures = futures()
+            df_futures = cached_futures()
         
         if not df_futures.empty:
             st.dataframe(df_futures, use_container_width=True)
@@ -253,7 +253,7 @@ def main():
         
         st.markdown("<div class='sub-header'>成交量趨勢</div>", unsafe_allow_html=True)
         with st.spinner("正在加載成交量數據..."):
-            df_turnover = turnover()
+            df_turnover = cached_turnover()
         
         if not df_turnover.empty:
             df_turnover.set_index('日期', inplace=True)
@@ -281,7 +281,7 @@ def main():
         st.markdown("<div class='sub-header'>外資與投信同步買超</div>", unsafe_allow_html=True)
         
         with st.spinner("正在加載外資投信同買資訊..."):
-            df_com_buy, data_date = for_ib_common()
+            df_com_buy, data_date = cached_for_ib_common()
         
         if not df_com_buy.empty:
             st.markdown(f"<p>數據日期：<span class='data-date'>{data_date}</span></p>", unsafe_allow_html=True)
@@ -297,7 +297,7 @@ def main():
         st.markdown("<div class='sub-header'>外資買超 TOP 50</div>", unsafe_allow_html=True)
         
         with st.spinner("正在加載外資買超資訊..."):
-            df_buy_top50, df_sell_top50, data_date = foreign_investors_trading()
+            df_buy_top50, df_sell_top50, data_date = cached_foreign_investors_trading()
         
         if not df_buy_top50.empty:
             st.markdown(f"<p>數據日期：<span class='data-date'>{data_date}</span></p>", unsafe_allow_html=True)
@@ -317,7 +317,7 @@ def main():
         st.markdown("<div class='sub-header'>投信買超 TOP 50</div>", unsafe_allow_html=True)
         
         with st.spinner("正在加載投信買超資訊..."):
-            df_buy_top50, df_sell_top50, data_date = investment_trust_trading()
+            df_buy_top50, df_sell_top50, data_date = cached_investment_trust_trading()
         
         if not df_buy_top50.empty:
             st.markdown(f"<p>數據日期：<span class='data-date'>{data_date}</span></p>", unsafe_allow_html=True)
@@ -337,7 +337,7 @@ def main():
         st.markdown("<div class='sub-header'>台幣匯率走勢</div>", unsafe_allow_html=True)
         
         with st.spinner("正在加載匯率資訊..."):
-            History_ExchangeRate = exchange_rate()
+            History_ExchangeRate = cached_exchange_rate()
         
         if not History_ExchangeRate.empty:
             # 使用預設日期範圍（最近一個月）
@@ -418,67 +418,177 @@ def main():
                     "2303": "聯電"
                 }
                 selected_stock = st.selectbox(
-                    "選擇股票",
-                    options=list(stock_options.keys()),
-                    format_func=lambda x: f"{x} - {stock_options[x]}"
+                    "選擇股票", 
+                    list(stock_options.keys()),
+                    format_func=lambda x: f"{x} ({stock_options[x]})",
+                    help="從列表中選擇一支股票，或在搜索框中輸入代碼搜索"
+                )
+                
+                use_test_data = st.checkbox(
+                    "使用測試數據", 
+                    value=False,
+                    help="使用內置的測試數據進行回測，這些數據專為測試交易策略而設計，包含足夠的交易信號"
                 )
                 
                 # 初始資金
-                initial_capital = st.number_input("初始資金 (新台幣)", min_value=10000, max_value=10000000, value=100000, step=10000)
+                initial_capital = st.number_input(
+                    "初始資金 (新台幣)", 
+                    min_value=10000, 
+                    max_value=10000000, 
+                    value=100000, 
+                    step=10000,
+                    help="設置回測初始資金金額，資金越多可交易的股數越多"
+                )
                 
                 # 交易手續費
-                fee_rate = st.slider("交易手續費率 (%)", min_value=0.0, max_value=0.5, value=0.1425, step=0.01, format="%.4f")
+                fee_rate = st.slider(
+                    "交易手續費率 (%)", 
+                    min_value=0.0, 
+                    max_value=0.5, 
+                    value=0.1425, 
+                    step=0.01, 
+                    format="%.4f",
+                    help="台股標準手續費率為0.1425%，可根據券商優惠調整"
+                )
                 
                 # 股價變動停損/停利
-                stop_loss = st.slider("停損比例 (%)", min_value=0, max_value=20, value=5, step=1)
-                take_profit = st.slider("停利比例 (%)", min_value=0, max_value=50, value=20, step=1)
+                stop_loss = st.slider(
+                    "停損比例 (%)", 
+                    min_value=0, 
+                    max_value=20, 
+                    value=5, 
+                    step=1,
+                    help="設置0表示不啟用停損，建議設置5-10%的停損以控制風險"
+                )
+                take_profit = st.slider(
+                    "停利比例 (%)", 
+                    min_value=0, 
+                    max_value=50, 
+                    value=20, 
+                    step=1,
+                    help="設置0表示不啟用停利，可根據策略和個人風險偏好調整"
+                )
             
             with col2:
                 # 回測時間範圍
-                backtest_start_date = st.date_input("回測開始日期", value=date.today() - timedelta(days=365))
-                backtest_end_date = st.date_input("回測結束日期", value=date.today())
-                
-                # 交易策略選擇
-                strategy_options = {
-                    "ma_cross": "均線交叉策略",
-                    "rsi": "RSI指標策略",
-                    "macd": "MACD策略",
-                    "bollinger": "布林通道策略",
-                    "foreign_buy": "外資買超策略"
-                }
-                selected_strategy = st.selectbox(
-                    "選擇交易策略",
-                    options=list(strategy_options.keys()),
-                    format_func=lambda x: strategy_options[x]
+                st.info("💡 提示: 建議回測時間至少包含3個月以上，以獲得更可靠的結果", icon="💡")
+                # 使用 datetime.date.today() 而非 date.today() 來避免可能的命名空間問題
+                current_date = datetime.now().date()
+                default_start_date = current_date - timedelta(days=365)
+                backtest_start_date = st.date_input(
+                    "回測開始日期", 
+                    value=default_start_date,
+                    help="回測起始日期，建議選擇至少1年前的日期以獲得足夠數據量"
+                )
+                backtest_end_date = st.date_input(
+                    "回測結束日期", 
+                    value=current_date,
+                    help="回測結束日期，默認為今天"
                 )
                 
-                # 策略參數容器
-                strategy_params_container = st.container()
+                # 交易策略選擇
+                strategy = st.selectbox(
+                    "選擇交易策略", 
+                    ["移動平均線交叉", "RSI超買超賣", "MACD交叉", "布林通道突破", "外資買超"],
+                    help="選擇要回測的交易策略"
+                )
                 
-                # 根據所選策略顯示相應參數
-                with strategy_params_container:
-                    st.markdown("##### 策略參數")
+                # 根據選擇的策略顯示相應的參數設置
+                if strategy == "移動平均線交叉":
+                    st.info("📊 移動平均線交叉策略是利用短期與長期移動平均線的交叉點作為買賣信號。當短期線向上穿過長期線時買入，向下穿過時賣出。", icon="📊")
+                    short_window = st.slider(
+                        "短期窗口", 
+                        min_value=5, 
+                        max_value=30, 
+                        value=5, 
+                        step=1,
+                        help="短期移動平均線的時間窗口，通常為5-10天"
+                    )
+                    long_window = st.slider(
+                        "長期窗口", 
+                        min_value=20, 
+                        max_value=120, 
+                        value=20, 
+                        step=5,
+                        help="長期移動平均線的時間窗口，常用20-60天"
+                    )
                     
-                    if selected_strategy == "ma_cross":
-                        short_ma = st.slider("短期均線 (天數)", min_value=5, max_value=30, value=5, step=1, key="short_ma")
-                        long_ma = st.slider("長期均線 (天數)", min_value=10, max_value=120, value=20, step=5, key="long_ma")
-                    
-                    elif selected_strategy == "rsi":
-                        rsi_period = st.slider("RSI 周期", min_value=5, max_value=30, value=14, step=1, key="rsi_period")
-                        rsi_overbought = st.slider("超買閾值", min_value=60, max_value=90, value=70, step=1, key="rsi_overbought")
-                        rsi_oversold = st.slider("超賣閾值", min_value=10, max_value=40, value=30, step=1, key="rsi_oversold")
-                    
-                    elif selected_strategy == "macd":
-                        macd_fast = st.slider("快線周期", min_value=5, max_value=20, value=12, step=1, key="macd_fast")
-                        macd_slow = st.slider("慢線周期", min_value=20, max_value=50, value=26, step=1, key="macd_slow")
-                        macd_signal = st.slider("信號線周期", min_value=5, max_value=15, value=9, step=1, key="macd_signal")
-                    
-                    elif selected_strategy == "bollinger":
-                        bollinger_period = st.slider("布林通道周期", min_value=10, max_value=30, value=20, step=1, key="bollinger_period")
-                        bollinger_std = st.slider("標準差倍數", min_value=1.0, max_value=3.0, value=2.0, step=0.1, key="bollinger_std")
-                    
-                    elif selected_strategy == "foreign_buy":
-                        foreign_buy_threshold = st.slider("外資買超閾值 (張)", min_value=100, max_value=5000, value=1000, step=100, key="foreign_buy_threshold")
+                    # 防止用戶設置錯誤的參數
+                    if short_window >= long_window:
+                        st.warning("⚠️ 短期窗口應小於長期窗口！請調整參數", icon="⚠️")
+                
+                elif strategy == "RSI超買超賣":
+                    st.info("📉 RSI(相對強弱指標)策略利用市場超買超賣狀態判斷。當RSI低於超賣閾值時買入，高於超買閾值時賣出。", icon="📉")
+                    rsi_period = st.slider(
+                        "RSI週期", 
+                        min_value=7, 
+                        max_value=21, 
+                        value=14, 
+                        step=1,
+                        help="計算RSI的時間窗口，標準為14天"
+                    )
+                    rsi_lower = st.slider(
+                        "RSI超賣閾值", 
+                        min_value=20, 
+                        max_value=40, 
+                        value=30, 
+                        step=1,
+                        help="RSI低於此值視為超賣信號，通常設為30"
+                    )
+                    rsi_upper = st.slider(
+                        "RSI超買閾值", 
+                        min_value=60, 
+                        max_value=80, 
+                        value=70, 
+                        step=1,
+                        help="RSI高於此值視為超買信號，通常設為70"
+                    )
+                
+                elif strategy == "MACD交叉":
+                    st.info("📈 MACD策略利用MACD線與信號線的交叉以及MACD柱狀圖的變化判斷買賣時機。當MACD線上穿信號線時買入，下穿時賣出。", icon="📈")
+                    macd_fast = st.slider(
+                        "MACD快線", 
+                        min_value=8, 
+                        max_value=20, 
+                        value=12, 
+                        step=1,
+                        help="MACD快速移動平均線參數，標準為12"
+                    )
+                    macd_slow = st.slider(
+                        "MACD慢線", 
+                        min_value=20, 
+                        max_value=40, 
+                        value=26, 
+                        step=1,
+                        help="MACD慢速移動平均線參數，標準為26"
+                    )
+                    macd_signal = st.slider(
+                        "信號線", 
+                        min_value=5, 
+                        max_value=12, 
+                        value=9, 
+                        step=1,
+                        help="MACD信號線參數，標準為9"
+                    )
+                
+                elif strategy == "布林通道突破":
+                    st.info("🔔 布林通道策略利用價格突破上軌或下軌作為交易信號。當價格跌破下軌后回升時買入，突破上軌后回落時賣出。", icon="🔔")
+                    bollinger_window = st.slider(
+                        "布林通道窗口", 
+                        min_value=10, 
+                        max_value=30, 
+                        value=20, 
+                        step=1,
+                        help="計算移動平均線的時間窗口，標準為20天"
+                    )
+                    bollinger_std = st.slider(
+                        "標準差倍數", 
+                        min_value=1.0, 
+                        max_value=3.0, 
+                        value=2.0, 
+                        step=0.1,
+                        help="決定通道寬度的標準差倍數，標準為2倍"
+                    )
             
             # 提交按鈕 - 確保點擊後保持在交易回測頁面
             submit_button = st.form_submit_button(label="執行回測", use_container_width=True)
@@ -486,53 +596,49 @@ def main():
             # 確保表單提交後保持在交易回測頁面
             if submit_button:
                 st.session_state.active_tab = "交易回測"
-                # 使用正確的方式設置查詢參數
-                st.experimental_set_query_params(tab="交易回測")
+                # 使用兼容性函數設置查詢參數
+                set_query_params({"tab": "交易回測"})
         
         # 如果表單被提交
         if submit_button:
             with st.spinner("正在執行回測計算..."):
                 # 獲取真實歷史數據
                 try:
+                    # 如果用戶選擇了使用測試數據，則將股票代碼設置為"TEST"
+                    if use_test_data:
+                        actual_stock_id = "TEST"
+                        st.info("使用測試數據進行回測，這些數據專為測試交易策略而設計，包含足夠的交易信號。")
+                    else:
+                        actual_stock_id = selected_stock
+                    
                     # 獲取策略參數，根據所選策略建立相應的參數字典
-                    if selected_strategy == "ma_cross":
+                    if strategy == "移動平均線交叉":
                         strategy_params = {
-                            'short_ma': short_ma,
-                            'long_ma': long_ma
+                            "short_window": short_window,
+                            "long_window": long_window
                         }
-                        log_message(f"執行均線交叉策略，參數：短期均線={short_ma}天，長期均線={long_ma}天")
-                    
-                    elif selected_strategy == "rsi":
+                    elif strategy == "RSI超買超賣":
                         strategy_params = {
-                            'rsi_period': rsi_period,
-                            'rsi_overbought': rsi_overbought,
-                            'rsi_oversold': rsi_oversold
+                            "rsi_period": rsi_period,
+                            "oversold": rsi_lower,
+                            "overbought": rsi_upper
                         }
-                        log_message(f"執行RSI策略，參數：周期={rsi_period}，超買閾值={rsi_overbought}，超賣閾值={rsi_oversold}")
-                    
-                    elif selected_strategy == "macd":
+                    elif strategy == "MACD交叉":
                         strategy_params = {
-                            'macd_fast': macd_fast,
-                            'macd_slow': macd_slow,
-                            'macd_signal': macd_signal
+                            "fast_period": macd_fast,
+                            "slow_period": macd_slow,
+                            "signal_period": macd_signal
                         }
-                        log_message(f"執行MACD策略，參數：快線={macd_fast}，慢線={macd_slow}，信號線={macd_signal}")
-                    
-                    elif selected_strategy == "bollinger":
+                    elif strategy == "布林通道突破":
                         strategy_params = {
-                            'bollinger_period': bollinger_period,
-                            'bollinger_std': bollinger_std
+                            "bollinger_period": bollinger_window,
+                            "num_std": bollinger_std
                         }
-                        log_message(f"執行布林通道策略，參數：周期={bollinger_period}，標準差={bollinger_std}")
-                    
-                    elif selected_strategy == "foreign_buy":
-                        strategy_params = {
-                            'foreign_buy_threshold': foreign_buy_threshold
-                        }
-                        log_message(f"執行外資買超策略，參數：閾值={foreign_buy_threshold}張")
+                    else:
+                        strategy_params = {}
                     
                     # 記錄回測參數信息
-                    log_message(f"開始回測 {selected_stock}，初始資金：{initial_capital}，停損比例：{stop_loss}%，停利比例：{take_profit}%")
+                    log_message(f"開始回測 {actual_stock_id}，初始資金：{initial_capital}")
                     log_message(f"回測時間範圍：{backtest_start_date} 至 {backtest_end_date}")
                     
                     # 設定回測時間範圍
@@ -544,28 +650,47 @@ def main():
                     
                     # 第一步：獲取股票歷史數據
                     progress_bar.progress(10, text="正在獲取歷史數據...")
-                    df_stock = get_stock_history(selected_stock, start_date_str, end_date_str)
+                    df_stock = cached_get_stock_history(actual_stock_id, start_date_str, end_date_str)
                     
                     if df_stock.empty:
-                        st.error(f"無法獲取 {selected_stock} 的歷史數據，請檢查股票代碼或選擇其他日期範圍")
+                        st.error(f"無法獲取 {actual_stock_id} 的歷史數據，請檢查股票代碼或選擇其他日期範圍")
                         return
                     
                     # 第二步：計算技術指標
                     progress_bar.progress(30, text="正在計算技術指標...")
-                    df_with_indicators = calculate_technical_indicators(df_stock)
+                    df_with_indicators = cached_calculate_technical_indicators(df_stock)
                     
                     # 第三步：執行回測
                     progress_bar.progress(50, text="正在執行策略回測...")
-                    trades_df, backtest_results, portfolio_df = backtest_strategy(
+                    backtest_results = backtest_strategy(
                         df_with_indicators, 
-                        selected_strategy, 
+                        strategy, 
                         strategy_params,
-                        initial_capital=initial_capital,
-                        fee_rate=fee_rate/100,  # 轉換百分比為小數
-                        tax_rate=0.003,  # 台灣股票交易稅率
-                        stop_loss=stop_loss/100,  # 轉換百分比為小數
-                        take_profit=take_profit/100  # 轉換百分比為小數
+                        initial_capital=initial_capital
                     )
+                    
+                    # 检查回测是否成功
+                    if not backtest_results.get("success", False):
+                        st.error(f"回測失敗：{backtest_results.get('error', '未知錯誤')}")
+                        progress_bar.progress(100, text="回測完成，但出現錯誤")
+                        
+                        # 為主要變數提供預設值，防止後續代碼出錯
+                        portfolio_df = pd.DataFrame(columns=['淨值', '基準淨值'])
+                        portfolio_df['淨值'] = [initial_capital]
+                        trades = []
+                        trades_df = pd.DataFrame()
+                        positions = []
+                        trading_count = 0
+                        # 跳過回測結果顯示
+                        return
+                    
+                    # 获取回测结果中的portfolio_df、trades和positions
+                    portfolio_df = backtest_results.get("portfolio_df", pd.DataFrame())
+                    trades = backtest_results.get("trades", [])
+                    positions = backtest_results.get("positions", [])
+                    
+                    # 转换交易记录为DataFrame以便显示
+                    trades_df = pd.DataFrame(trades) if trades else pd.DataFrame()
                     
                     # 第四步：生成報告
                     progress_bar.progress(80, text="正在生成回測報告...")
@@ -576,675 +701,329 @@ def main():
                     # 回測基本信息
                     st.markdown(f"""
                     **回測信息:**
-                    - 股票: {selected_stock} ({stock_options.get(selected_stock, '')})
-                    - 策略: {strategy_options.get(selected_strategy, selected_strategy)}
+                    - 股票: {actual_stock_id} ({stock_options.get(actual_stock_id, '')})
+                    - 策略: {strategy}
                     - 回測時間: {start_date_str} 至 {end_date_str}
-                    - 初始資金: {initial_capital:,} 元
+                    - 初始資金: {initial_capital:,.0f} 元
                     """)
                     
-                    # 回測績效指標
-                    metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
+                    # 顯示回測結果摘要
+                    st.markdown("### 回測結果摘要")
                     
-                    with metrics_col1:
-                        st.metric(label="總報酬率", value=backtest_results["總報酬率"])
+                    # 使用指標卡片展示關鍵績效指標
+                    kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
+                    with kpi_col1:
+                        st.metric(
+                            label="最終資產", 
+                            value=f"{portfolio_df['淨值'].iloc[-1]:,.0f} 元", 
+                            delta=f"{backtest_results.get('總收益率', '0.00%')}",
+                            delta_color="normal"
+                        )
+                        st.metric(
+                            label="最大回撤", 
+                            value=backtest_results.get("最大回撤", "0.00%"), 
+                            delta=None
+                        )
                     
-                    with metrics_col2:
-                        st.metric(label="年化報酬率", value=backtest_results["年化報酬率"])
+                    with kpi_col2:
+                        st.metric(
+                            label="總收益率", 
+                            value=backtest_results.get("總收益率", "0.00%"), 
+                            delta=None,
+                            delta_color="normal"
+                        )
+                        st.metric(
+                            label="夏普比率", 
+                            value=backtest_results.get("夏普比率", "N/A"), 
+                            delta=None,
+                            delta_color="off"
+                        )
                     
-                    with metrics_col3:
-                        st.metric(label="勝率", value=backtest_results["勝率"])
+                    # 確保交易次數可以正確處理，不論是整數還是字符串
+                    trading_count_raw = backtest_results.get("交易次數", 0)
+                    if isinstance(trading_count_raw, str):
+                        trading_count = int(trading_count_raw.replace("次", ""))
+                    else:
+                        trading_count = int(trading_count_raw)
                     
-                    with metrics_col4:
-                        st.metric(label="最大回撤", value=backtest_results["最大回撤"])
+                    with kpi_col3:
+                        st.metric(
+                            label="交易次數", 
+                            value=f"{trading_count} 次",
+                            delta=f"勝率: {backtest_results.get('勝率', '0.00%')}",
+                            delta_color="normal"
+                        )
+                        st.metric(
+                            label="年化報酬率", 
+                            value=backtest_results.get("年化收益率", "0.00%"), 
+                            delta=None
+                        )
                     
-                    # 完成進度條
-                    progress_bar.progress(100, text="回測完成！")
-                    
-                    # 回測結果可視化
-                    tab_results, tab_trades, tab_metrics = st.tabs(["績效曲線", "交易記錄", "詳細指標"])
-                    
-                    with tab_results:
-                        # 檢查是否有回測資產淨值數據
-                        if not portfolio_df.empty:
-                            # 繪製策略淨值曲線
-                            fig = go.Figure()
-                            
-                            fig.add_trace(go.Scatter(
-                                x=portfolio_df.index, 
-                                y=portfolio_df['淨值'], 
-                                mode='lines',
-                                name=f'策略淨值 ({strategy_options[selected_strategy]})',
-                                line=dict(color='#1E88E5', width=2)
-                            ))
-                            
-                            # 使用股票收盤價模擬大盤基準
-                            initial_stock_price = df_stock['收盤價'].iloc[0]
-                            benchmark_value = (df_stock['收盤價'] / initial_stock_price) * initial_capital
-                            
-                            fig.add_trace(go.Scatter(
-                                x=df_stock.index, 
-                                y=benchmark_value, 
-                                mode='lines',
-                                name='買入並持有策略',
-                                line=dict(color='#FF9800', width=2, dash='dash')
-                            ))
-                            
-                            fig.update_layout(
-                                title=f'{stock_options.get(selected_stock, selected_stock)} 回測績效對比',
-                                xaxis_title='日期',
-                                yaxis_title='淨值 (元)',
-                                height=500,
-                                hovermode='x unified'
-                            )
-                            
-                            st.plotly_chart(fig, use_container_width=True)
+                    # 添加回測績效解釋
+                    if trading_count > 0:
+                        performance_explanation = ""
+                        total_return = backtest_results.get("總收益率", "0.00%").replace("%", "")
+                        if float(total_return) > 0:
+                            performance_explanation += f"策略在測試期間獲得了 **{backtest_results.get('總收益率', '0.00%')}** 的總收益，"
+                            performance_explanation += f"盈虧比為 **{backtest_results.get('盈虧比', '0.00')}**，表明策略的風險收益特性。"
                         else:
-                            st.warning("無法生成策略淨值曲線，可能是因為交易次數不足或數據問題")
-                            
-                            # 顯示原始股價走勢
-                            fig = go.Figure()
-                            fig.add_trace(go.Candlestick(
-                                x=df_stock.index,
-                                open=df_stock['開盤價'],
-                                high=df_stock['最高價'],
-                                low=df_stock['最低價'],
-                                close=df_stock['收盤價'],
-                                name='股價走勢'
-                            ))
-                            
-                            fig.update_layout(
-                                title=f'{stock_options.get(selected_stock, selected_stock)} 股價走勢',
-                                xaxis_title='日期',
-                                yaxis_title='價格 (元)',
-                                height=500
-                            )
-                            
-                            st.plotly_chart(fig, use_container_width=True)
-                    
-                    with tab_trades:
-                        # 顯示交易記錄
-                        if not trades_df.empty:
-                            st.dataframe(trades_df, use_container_width=True)
-                            
-                            # 交易記錄統計
-                            profit_trades = trades_df[trades_df['淨利'] > 0]
-                            loss_trades = trades_df[trades_df['淨利'] < 0]
-                            
-                            st.markdown(f"""
-                            ##### 交易統計:
-                            - 總交易次數: {len(trades_df[trades_df['類型'].isin(['買入', '賣出', '停損賣出', '停利賣出', '平倉賣出'])])}
-                            - 盈利交易: {len(profit_trades)} 次
-                            - 虧損交易: {len(loss_trades)} 次
-                            - 平均獲利: {profit_trades['淨利'].mean() if len(profit_trades) > 0 else 0:.2f}
-                            - 平均虧損: {loss_trades['淨利'].mean() if len(loss_trades) > 0 else 0:.2f}
-                            """)
+                            performance_explanation += f"策略在測試期間虧損了 **{backtest_results.get('總收益率', '0.00%')}**，"
+                            performance_explanation += f"盈虧比為 **{backtest_results.get('盈虧比', '0.00')}**，表明相對於所承擔的風險，策略表現不佳。"
+                        
+                        win_rate = backtest_results.get("勝率", "0.00%").replace("%", "")
+                        if float(win_rate) > 50:
+                            performance_explanation += f" 策略的勝率為 **{backtest_results.get('勝率', '0.00%')}**，"
+                            performance_explanation += "大多數交易都是獲利的。"
                         else:
-                            st.warning("在回測期間內沒有產生任何交易記錄")
+                            performance_explanation += f" 策略的勝率為 **{backtest_results.get('勝率', '0.00%')}**，"
+                            performance_explanation += "大多數交易都是虧損的，但獲利交易的平均收益可能高於虧損交易的平均虧損。"
+                        
+                        max_drawdown = backtest_results.get("最大回撤", "0.00%").replace("%", "")
+                        if float(max_drawdown) > 20:
+                            performance_explanation += f" 最大回撤為 **{backtest_results.get('最大回撤', '0.00%')}**，"
+                            performance_explanation += "表明策略在某些時期面臨較大的風險和波動，需要較好的風險承受能力。"
+                        else:
+                            performance_explanation += f" 最大回撤為 **{backtest_results.get('最大回撤', '0.00%')}**，"
+                            performance_explanation += "顯示策略的下行風險相對可控。"
+                        
+                        st.info(performance_explanation, icon="💡")
                     
-                    with tab_metrics:
-                        col1, col2 = st.columns(2)
+                    # 顯示詳細指標
+                    show_detailed_metrics = st.checkbox("顯示詳細績效指標", value=False)
+                    if show_detailed_metrics:
+                        st.markdown("#### 詳細績效指標")
+                        metrics_df = pd.DataFrame({
+                            '指標': [
+                                '初始資金', '最終資產', '總收益率', '年化報酬率', 
+                                '交易次數', '勝率', '盈虧比', '最大回撤',
+                                '夏普比率', '買入並持有收益率'
+                            ],
+                            '數值': [
+                                f"{initial_capital:,.0f} 元",
+                                f"{portfolio_df['淨值'].iloc[-1]:,.0f} 元",
+                                f"{backtest_results.get('總收益率', '0.00%')}",
+                                f"{backtest_results.get('年化收益率', '0.00%')}",
+                                f"{trading_count} 次",
+                                f"{backtest_results.get('勝率', '0.00%')}",
+                                f"{backtest_results.get('盈虧比', '0.00')}",
+                                f"{backtest_results.get('最大回撤', '0.00%')}",
+                                f"{backtest_results.get('夏普比率', 'N/A')}",
+                                f"{backtest_results.get('買入並持有收益率', 'N/A')}"
+                            ]
+                        })
+                        st.dataframe(metrics_df, use_container_width=True)
+                    
+                    # 顯示淨值曲線圖
+                    st.markdown("#### 淨值曲線")
+                    
+                    # 建立每日淨值圖表
+                    fig = go.Figure()
+                    
+                    # 添加策略淨值曲線
+                    fig.add_trace(go.Scatter(
+                        x=portfolio_df.index, 
+                        y=portfolio_df['淨值'], 
+                        mode='lines',
+                        name=f'策略淨值 ({strategy})',
+                        line=dict(color='#1E88E5', width=2)
+                    ))
+                    
+                    # 如果'基準淨值'不存在，則計算基本的買入持有基準
+                    if '基準淨值' not in portfolio_df.columns:
+                        try:
+                            # 計算基準淨值 (買入持有)
+                            log_message("開始計算基準淨值")
+                            
+                            # 確保 df_stock 的索引是日期型態
+                            if not isinstance(df_stock.index, pd.DatetimeIndex):
+                                df_stock.index = pd.to_datetime(df_stock.index)
+                                log_message("轉換 df_stock 索引為日期型態")
+                            
+                            # 確保 portfolio_df 的索引是日期型態
+                            if not isinstance(portfolio_df.index, pd.DatetimeIndex):
+                                portfolio_df.index = pd.to_datetime(portfolio_df.index)
+                                log_message("轉換 portfolio_df 索引為日期型態")
+                            
+                            # 獲取第一天和最後一天的價格
+                            start_price = df_stock['收盤價'].iloc[0]
+                            log_message(f"起始價格: {start_price}")
+                            
+                            # 為每一個 portfolio_df 中的日期找到對應的股票價格
+                            benchmark_values = []
+                            valid_dates = []
+                            
+                            for current_date in portfolio_df.index:
+                                # 找到最接近的交易日
+                                closest_date = df_stock.index[df_stock.index <= current_date][-1] if any(df_stock.index <= current_date) else df_stock.index[0]
+                                price = df_stock.loc[closest_date, '收盤價']
+                                benchmark_values.append(price / start_price)
+                                valid_dates.append(current_date)
+                                
+                            # 創建基準淨值 DataFrame
+                            benchmark_df = pd.DataFrame({'基準淨值': benchmark_values}, index=valid_dates)
+                            log_message(f"成功創建基準淨值，數據點數量: {len(benchmark_df)}")
+                            
+                            # 添加基準線(買入持有)
+                            fig.add_trace(go.Scatter(
+                                x=benchmark_df.index, 
+                                y=benchmark_df['基準淨值'], 
+                                mode='lines',
+                                name='基準淨值 (買入持有)',
+                                line=dict(color='#FF5252', width=1.5, dash='dash')
+                            ))
+                        except Exception as e:
+                            log_message(f"計算基準淨值時發生錯誤: {e}", level="error")
+                            # 如果無法計算基準淨值，則使用最簡單的方式生成平行線作為基準
+                            try:
+                                # 如果上述計算方法失敗，創建一個簡單的平行基準線
+                                log_message("使用簡單方法創建基準線")
+                                # 生成與 portfolio_df 相同長度的平直線基準 (起始值為1)
+                                simple_benchmark = [1.0] * len(portfolio_df)
+                                fig.add_trace(go.Scatter(
+                                    x=portfolio_df.index, 
+                                    y=simple_benchmark, 
+                                    mode='lines',
+                                    name='買入持有基準',
+                                    line=dict(color='#FF5252', width=1.5, dash='dash')
+                                ))
+                                log_message("成功創建簡單基準線")
+                            except Exception as inner_e:
+                                log_message(f"創建簡單基準線時也發生錯誤: {inner_e}", level="error")
+                                st.warning("無法顯示基準線，僅顯示策略淨值")
+                    else:
+                        # 如果已有基準淨值列，直接使用
+                        fig.add_trace(go.Scatter(
+                            x=portfolio_df.index, 
+                            y=portfolio_df['基準淨值'], 
+                            mode='lines',
+                            name='基準淨值 (買入持有)',
+                            line=dict(color='#FF5252', width=1.5, dash='dash')
+                        ))
+                    
+                    # 根據獲利情況標註背景顏色
+                    total_return = backtest_results.get("總收益率", "0.00%").replace("%", "")
+                    if float(total_return) > 0:
+                        # 獲利背景設為綠色
+                        background_color = 'rgba(232, 245, 233, 0.8)'
+                    else:
+                        # 虧損背景設為淺紅色
+                        background_color = 'rgba(255, 235, 238, 0.8)'
+                    
+                    # 標註最大回撤區間
+                    if 'drawdown_start' in backtest_results and 'drawdown_end' in backtest_results:
+                        fig.add_vrect(
+                            x0=backtest_results['drawdown_start'],
+                            x1=backtest_results['drawdown_end'],
+                            fillcolor="rgba(255, 0, 0, 0.1)",
+                            opacity=0.5,
+                            layer="below",
+                            line_width=0,
+                            annotation_text="最大回撤區間",
+                            annotation_position="top left"
+                        )
+                    
+                    # 美化圖表
+                    fig.update_layout(
+                        title='交易策略淨值變化',
+                        xaxis_title='日期',
+                        yaxis_title='淨值 (起始=1)',
+                        legend=dict(
+                            yanchor="top",
+                            y=0.99,
+                            xanchor="left",
+                            x=0.01,
+                            bgcolor='rgba(255, 255, 255, 0.8)'
+                        ),
+                        hovermode="x unified",
+                        plot_bgcolor=background_color,
+                        height=450,
+                        margin=dict(l=0, r=0, t=40, b=0),
+                    )
+                    
+                    # 添加網格線
+                    fig.update_xaxes(
+                        showgrid=True, 
+                        gridwidth=1, 
+                        gridcolor='rgba(0,0,0,0.1)'
+                    )
+                    fig.update_yaxes(
+                        showgrid=True, 
+                        gridwidth=1, 
+                        gridcolor='rgba(0,0,0,0.1)'
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # 顯示交易清單
+                    st.markdown("#### 交易明細")
+                    show_trades = st.checkbox("顯示所有交易", value=False)
+                    
+                    if show_trades and not trades_df.empty:
+                        # 美化交易DataFrame
+                        trades_display = trades_df.copy()
                         
-                        with col1:
-                            st.markdown("##### 回測結果指標")
-                            result_df = pd.DataFrame(list(backtest_results.items()), columns=['指標', '數值'])
-                            st.dataframe(result_df, use_container_width=True, hide_index=True)
+                        # 設置正負收益的顏色
+                        def color_profit(val):
+                            color = 'green' if val > 0 else 'red' if val < 0 else 'black'
+                            return f'color: {color}'
                         
-                        with col2:
-                            st.markdown("##### 股票基本資訊")
-                            stock_info = get_stock_info(selected_stock)
-                            info_df = pd.DataFrame(list(stock_info.items()), columns=['項目', '資訊'])
-                            st.dataframe(info_df, use_container_width=True, hide_index=True)
+                        # 應用樣式到DataFrame
+                        styled_trades = trades_display.style.applymap(
+                            color_profit, 
+                            subset=['收益', '收益率']
+                        )
                         
-                        # 顯示技術指標
-                        st.markdown("##### 技術指標圖表")
+                        st.dataframe(styled_trades, use_container_width=True)
+                    else:
+                        st.info("選擇「顯示所有交易」以查看詳細交易清單", icon="ℹ️")
+                    
+                    # 顯示技術指標圖表
+                    try:
+                        # 在這裡放置技術指標圖表相關的代碼
+                        st.markdown("### 技術指標圖表")
                         
-                        # 添加時間範圍選擇器，方便用戶觀察不同時間段的技術指標
-                        date_range_options = ["全部時間", "最近一個月", "最近三個月", "最近六個月"]
-                        selected_date_range = st.radio("選擇時間範圍", date_range_options, horizontal=True)
+                        # 將時間範圍選擇器放入表單中
+                        with st.form(key="indicator_date_range_form"):
+                            # 添加時間範圍選擇器，方便用戶觀察不同時間段的技術指標
+                            date_range_options = ["全部時間", "最近一個月", "最近三個月", "最近六個月"]
+                            selected_date_range = st.radio("選擇時間範圍", date_range_options, horizontal=True)
+                            
+                            # 添加表單提交按鈕
+                            filter_submitted = st.form_submit_button("應用過濾", use_container_width=True)
                         
                         # 根據選擇範圍過濾數據
-                        try:
-                            if selected_date_range == "最近一個月":
-                                end_date = df_with_indicators.index[-1]
-                                start_date = end_date - pd.Timedelta(days=30)
-                                filtered_df = df_with_indicators[df_with_indicators.index >= start_date]
-                                log_message(f"過濾最近一個月數據: 從 {start_date} 到 {end_date}, 數據點數量: {len(filtered_df)}")
-                            elif selected_date_range == "最近三個月":
-                                end_date = df_with_indicators.index[-1]
-                                start_date = end_date - pd.Timedelta(days=90)
-                                filtered_df = df_with_indicators[df_with_indicators.index >= start_date]
-                                log_message(f"過濾最近三個月數據: 從 {start_date} 到 {end_date}, 數據點數量: {len(filtered_df)}")
-                            elif selected_date_range == "最近六個月":
-                                end_date = df_with_indicators.index[-1]
-                                start_date = end_date - pd.Timedelta(days=180)
-                                filtered_df = df_with_indicators[df_with_indicators.index >= start_date]
-                                log_message(f"過濾最近六個月數據: 從 {start_date} 到 {end_date}, 數據點數量: {len(filtered_df)}")
-                            else:
-                                filtered_df = df_with_indicators.copy()
-                                log_message(f"使用全部數據, 數據點數量: {len(filtered_df)}")
-                            
-                            # 打印數據框的日期範圍和索引類型
-                            log_message(f"過濾後數據的索引類型: {type(filtered_df.index)}")
-                            log_message(f"過濾後數據的列: {filtered_df.columns.tolist()}")
-                            
-                            # 如果過濾後的數據為空，使用原始數據
-                            if filtered_df.empty:
-                                filtered_df = df_with_indicators.copy()
-                                st.warning(f"選擇的時間範圍內沒有數據，顯示全部時間範圍")
-                                log_message("過濾結果為空，使用全部數據")
-                        except Exception as e:
+                        # 獲取日期範圍
+                        end_date = df_with_indicators.index[-1]
+                        
+                        if selected_date_range == "最近一個月":
+                            start_date = end_date - pd.Timedelta(days=30)
+                        elif selected_date_range == "最近三個月":
+                            start_date = end_date - pd.Timedelta(days=90)
+                        elif selected_date_range == "最近六個月":
+                            start_date = end_date - pd.Timedelta(days=180)
+                        else:  # 全部時間
                             filtered_df = df_with_indicators.copy()
-                            st.warning(f"過濾數據時發生錯誤：{e}，顯示全部時間範圍")
-                            log_message(f"過濾數據時發生錯誤: {e}", level="error")
+                            log_message(f"使用全部數據, 數據點數量: {len(filtered_df)}")
                         
-                        # 選擇要顯示的指標
-                        indicator_options = ["移動平均線", "RSI指標", "MACD指標", "布林通道", "KD指標"]
-                        selected_indicator = st.selectbox("選擇技術指標", indicator_options)
+                        # 根據選擇的日期範圍過濾數據
+                        if selected_date_range != "全部時間":
+                            filtered_df = df_with_indicators[df_with_indicators.index >= start_date]
+                            log_message(f"過濾{selected_date_range}數據: 從 {start_date} 到 {end_date}, 數據點數量: {len(filtered_df)}")
                         
-                        # 添加顯示買賣訊號選項
-                        show_signals = st.checkbox("顯示買賣訊號", value=True)
+                        # 如果過濾後的數據為空，使用原始數據
+                        if filtered_df.empty:
+                            filtered_df = df_with_indicators.copy()
+                            st.warning(f"選擇的時間範圍內沒有數據，顯示全部時間範圍")
+                            log_message("過濾結果為空，使用全部數據")
                         
-                        # 繪製所選指標
-                        try:
-                            # 確保過濾後的數據框非空且包含必要的列
-                            if filtered_df.empty:
-                                st.warning("無法繪製圖表：沒有可用的數據")
-                                log_message("繪製圖表時發現數據為空", level="warning")
-                            # 檢查數據中是否包含必要的列
-                            elif not filtered_df.empty:
-                                required_columns = ['開盤價', '最高價', '最低價', '收盤價']
-                                missing_columns = [col for col in required_columns if col not in filtered_df.columns]
-                                if missing_columns:
-                                    st.warning(f"無法繪製圖表：缺少必要的列 {missing_columns}")
-                                    log_message(f"繪製圖表時缺少必要的列: {missing_columns}", level="warning")
-                                else:
-                                    if selected_indicator == "移動平均線":
-                                        log_message(f"繪製移動平均線圖表，數據點數量: {len(filtered_df)}")
-                                        fig = go.Figure()
-                                        
-                                        # 添加K線圖
-                                        fig.add_trace(go.Candlestick(
-                                            x=filtered_df.index,
-                                            open=filtered_df['開盤價'],
-                                            high=filtered_df['最高價'],
-                                            low=filtered_df['最低價'],
-                                            close=filtered_df['收盤價'],
-                                            name='股價',
-                                            increasing_line_color='red',  # 漲為紅色（符合台灣市場）
-                                            decreasing_line_color='green'  # 跌為綠色
-                                        ))
-                                        
-                                        # 添加移動平均線
-                                        ma_columns = [col for col in filtered_df.columns if isinstance(col, str) and col.startswith('MA')]
-                                        ma_colors = ['#1E88E5', '#FFC107', '#FF5722', '#9C27B0', '#4CAF50']
-                                        
-                                        for i, col in enumerate(ma_columns):
-                                            color_idx = i % len(ma_colors)
-                                            fig.add_trace(go.Scatter(
-                                                x=filtered_df.index,
-                                                y=filtered_df[col],
-                                                name=col,
-                                                line=dict(color=ma_colors[color_idx], width=1.5)
-                                            ))
-                                        
-                                        # 如果選擇顯示買賣訊號且策略為均線交叉
-                                        if show_signals and selected_strategy == "ma_cross":
-                                            # 獲取買入信號
-                                            buy_signals = filtered_df[filtered_df['signal'] == 1]
-                                            # 獲取賣出信號
-                                            sell_signals = filtered_df[filtered_df['signal'] == -1]
-                                            
-                                            # 添加買入標記
-                                            fig.add_trace(go.Scatter(
-                                                x=buy_signals.index,
-                                                y=buy_signals['收盤價'],
-                                                mode='markers',
-                                                name='買入信號',
-                                                marker=dict(symbol='triangle-up', size=10, color='red')
-                                            ))
-                                            
-                                            # 添加賣出標記
-                                            fig.add_trace(go.Scatter(
-                                                x=sell_signals.index,
-                                                y=sell_signals['收盤價'],
-                                                mode='markers',
-                                                name='賣出信號',
-                                                marker=dict(symbol='triangle-down', size=10, color='green')
-                                            ))
-                                        
-                                        fig.update_layout(
-                                            title=f'{stock_options.get(selected_stock, selected_stock)} 移動平均線',
-                                            xaxis_title='日期',
-                                            yaxis_title='價格',
-                                            legend_title_text='指標',
-                                            height=600,
-                                            template='plotly_white',
-                                            hovermode='x unified'
-                                        )
-                                        
-                                        st.plotly_chart(fig, use_container_width=True)
-                                        
-                                        # 添加均線交叉策略說明
-                                        if selected_strategy == "ma_cross":
-                                            st.info(f"""
-                                            **均線交叉策略說明**：
-                                            - 當短期均線(MA{short_ma})上穿長期均線(MA{long_ma})時產生買入訊號
-                                            - 當短期均線(MA{short_ma})下穿長期均線(MA{long_ma})時產生賣出訊號
-                                            - 這是一個趨勢跟踪策略，適合在明確趨勢的市場中使用
-                                            """)
-                                        
-                                    elif selected_indicator == "RSI指標":
-                                        # 創建兩個子圖
-                                        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                                                   vertical_spacing=0.1, 
-                                                   row_heights=[0.7, 0.3])
-                                        
-                                        # 添加K線圖
-                                        fig.add_trace(go.Candlestick(
-                                            x=filtered_df.index,
-                                            open=filtered_df['開盤價'],
-                                            high=filtered_df['最高價'],
-                                            low=filtered_df['最低價'],
-                                            close=filtered_df['收盤價'],
-                                            name='股價',
-                                            increasing_line_color='red',  # 漲為紅色
-                                            decreasing_line_color='green'  # 跌為綠色
-                                        ), row=1, col=1)
-                                        
-                                        # 添加RSI指標
-                                        fig.add_trace(go.Scatter(
-                                            x=filtered_df.index,
-                                            y=filtered_df['RSI14'],
-                                            name='RSI(14)',
-                                            line=dict(color='purple', width=1.5)
-                                        ), row=2, col=1)
-                                        
-                                        # 添加超買超賣線
-                                        # 超買線（70）
-                                        fig.add_shape(
-                                            type="line",
-                                            x0=filtered_df.index[0],
-                                            y0=70,
-                                            x1=filtered_df.index[-1],
-                                            y1=70,
-                                            line=dict(color="red", width=1, dash="dash"),
-                                            row=2, col=1
-                                        )
-                                        
-                                        # 超賣線（30）
-                                        fig.add_shape(
-                                            type="line",
-                                            x0=filtered_df.index[0],
-                                            y0=30,
-                                            x1=filtered_df.index[-1],
-                                            y1=30,
-                                            line=dict(color="green", width=1, dash="dash"),
-                                            row=2, col=1
-                                        )
-                                        
-                                        # 中間線（50）
-                                        fig.add_shape(
-                                            type="line",
-                                            x0=filtered_df.index[0],
-                                            y0=50,
-                                            x1=filtered_df.index[-1],
-                                            y1=50,
-                                            line=dict(color="gray", width=1, dash="dot"),
-                                            row=2, col=1
-                                        )
-                                        
-                                        # 如果選擇顯示買賣訊號且策略為RSI
-                                        if show_signals and selected_strategy == "rsi":
-                                            # 獲取買入信號
-                                            buy_signals = filtered_df[filtered_df['signal'] == 1]
-                                            # 獲取賣出信號
-                                            sell_signals = filtered_df[filtered_df['signal'] == -1]
-                                            
-                                            # 添加買入標記
-                                            fig.add_trace(go.Scatter(
-                                                x=buy_signals.index,
-                                                y=buy_signals['收盤價'],
-                                                mode='markers',
-                                                name='買入信號',
-                                                marker=dict(symbol='triangle-up', size=10, color='red')
-                                            ), row=1, col=1)
-                                            
-                                            # 添加賣出標記
-                                            fig.add_trace(go.Scatter(
-                                                x=sell_signals.index,
-                                                y=sell_signals['收盤價'],
-                                                mode='markers',
-                                                name='賣出信號',
-                                                marker=dict(symbol='triangle-down', size=10, color='green')
-                                            ), row=1, col=1)
-                                        
-                                        fig.update_layout(
-                                            title=f'{stock_options.get(selected_stock, selected_stock)} RSI指標',
-                                            xaxis_title='日期',
-                                            yaxis_title='價格',
-                                            height=600,
-                                            template='plotly_white',
-                                            hovermode='x unified'
-                                        )
-                                        
-                                        # 更新RSI圖表的Y軸範圍，確保顯示0-100
-                                        fig.update_yaxes(range=[0, 100], row=2, col=1)
-                                        
-                                        st.plotly_chart(fig, use_container_width=True)
-                                        
-                                        # 添加RSI策略說明
-                                        if selected_strategy == "rsi":
-                                            st.info(f"""
-                                            **RSI策略說明**：
-                                            - 當RSI從超賣區域（{rsi_oversold}以下）上穿超賣閾值時產生買入訊號
-                                            - 當RSI從超買區域（{rsi_overbought}以上）下穿超買閾值時產生賣出訊號
-                                            - RSI指標適合用於判斷市場的超買超賣狀態，特別適合震盪市場
-                                            """)
-                                        
-                                    elif selected_indicator == "MACD指標":
-                                        # 創建兩個子圖
-                                        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                                                   vertical_spacing=0.1, 
-                                                   row_heights=[0.7, 0.3])
-                                        
-                                        # 添加K線圖
-                                        fig.add_trace(go.Candlestick(
-                                            x=filtered_df.index,
-                                            open=filtered_df['開盤價'],
-                                            high=filtered_df['最高價'],
-                                            low=filtered_df['最低價'],
-                                            close=filtered_df['收盤價'],
-                                            name='股價',
-                                            increasing_line_color='red',  # 漲為紅色
-                                            decreasing_line_color='green'  # 跌為綠色
-                                        ), row=1, col=1)
-                                        
-                                        # 添加MACD和信號線
-                                        fig.add_trace(go.Scatter(
-                                            x=filtered_df.index,
-                                            y=filtered_df['MACD'],
-                                            name='MACD線',
-                                            line=dict(color='blue', width=1.5)
-                                        ), row=2, col=1)
-                                        
-                                        fig.add_trace(go.Scatter(
-                                            x=filtered_df.index,
-                                            y=filtered_df['MACD_Signal'],
-                                            name='信號線',
-                                            line=dict(color='red', width=1.5)
-                                        ), row=2, col=1)
-                                        
-                                        # 添加MACD柱狀圖，正值為紅色，負值為綠色（符合台灣市場風格）
-                                        colors = ['red' if val >= 0 else 'green' for val in filtered_df['MACD_Hist']]
-                                        fig.add_trace(go.Bar(
-                                            x=filtered_df.index,
-                                            y=filtered_df['MACD_Hist'],
-                                            name='柱狀圖',
-                                            marker_color=colors
-                                        ), row=2, col=1)
-                                        
-                                        # 如果選擇顯示買賣訊號且策略為MACD
-                                        if show_signals and selected_strategy == "macd":
-                                            # 獲取買入信號
-                                            buy_signals = filtered_df[filtered_df['signal'] == 1]
-                                            # 獲取賣出信號
-                                            sell_signals = filtered_df[filtered_df['signal'] == -1]
-                                            
-                                            # 添加買入標記
-                                            fig.add_trace(go.Scatter(
-                                                x=buy_signals.index,
-                                                y=buy_signals['收盤價'],
-                                                mode='markers',
-                                                name='買入信號',
-                                                marker=dict(symbol='triangle-up', size=10, color='red')
-                                            ), row=1, col=1)
-                                            
-                                            # 添加賣出標記
-                                            fig.add_trace(go.Scatter(
-                                                x=sell_signals.index,
-                                                y=sell_signals['收盤價'],
-                                                mode='markers',
-                                                name='賣出信號',
-                                                marker=dict(symbol='triangle-down', size=10, color='green')
-                                            ), row=1, col=1)
-                                        
-                                        fig.update_layout(
-                                            title=f'{stock_options.get(selected_stock, selected_stock)} MACD指標',
-                                            xaxis_title='日期',
-                                            yaxis_title='價格',
-                                            height=600,
-                                            template='plotly_white',
-                                            hovermode='x unified'
-                                        )
-                                        
-                                        # 確保MACD視圖的零線可見
-                                        fig.add_shape(
-                                            type='line',
-                                            x0=filtered_df.index[0],
-                                            y0=0,
-                                            x1=filtered_df.index[-1],
-                                            y1=0,
-                                            line=dict(color='gray', width=1, dash='dot'),
-                                            row=2, col=1
-                                        )
-                                        
-                                        st.plotly_chart(fig, use_container_width=True)
-                                        
-                                        # 添加MACD策略說明
-                                        if selected_strategy == "macd":
-                                            st.info(f"""
-                                            **MACD策略說明**：
-                                            - 當MACD線（藍線）從下方穿過信號線（紅線）時產生買入訊號
-                                            - 當MACD線從上方穿過信號線時產生賣出訊號
-                                            - MACD參數設置：快線周期={macd_fast}，慢線周期={macd_slow}，信號線周期={macd_signal}
-                                            - MACD是一個綜合趨勢和動量的指標，適合識別中長期趨勢
-                                            """)
-                                        
-                                    elif selected_indicator == "布林通道":
-                                        fig = go.Figure()
-                                        
-                                        # 添加K線圖
-                                        fig.add_trace(go.Candlestick(
-                                            x=filtered_df.index,
-                                            open=filtered_df['開盤價'],
-                                            high=filtered_df['最高價'],
-                                            low=filtered_df['最低價'],
-                                            close=filtered_df['收盤價'],
-                                            name='股價',
-                                            increasing_line_color='red',  # 漲為紅色
-                                            decreasing_line_color='green'  # 跌為綠色
-                                        ))
-                                        
-                                        # 添加布林帶
-                                        fig.add_trace(go.Scatter(
-                                            x=filtered_df.index,
-                                            y=filtered_df['BB_Upper'],
-                                            name='上軌',
-                                            line=dict(color='rgba(255, 99, 71, 0.7)', width=1)  # 紅色調
-                                        ))
-                                        
-                                        fig.add_trace(go.Scatter(
-                                            x=filtered_df.index,
-                                            y=filtered_df['BB_Middle'],
-                                            name='中軌',
-                                            line=dict(color='rgba(30, 136, 229, 0.9)', width=1.5)  # 藍色
-                                        ))
-                                        
-                                        fig.add_trace(go.Scatter(
-                                            x=filtered_df.index,
-                                            y=filtered_df['BB_Lower'],
-                                            name='下軌',
-                                            line=dict(color='rgba(46, 125, 50, 0.7)', width=1),  # 綠色調
-                                            fill='tonexty',
-                                            fillcolor='rgba(173, 216, 230, 0.2)'
-                                        ))
-                                        
-                                        # 如果選擇顯示買賣訊號且策略為布林通道
-                                        if show_signals and selected_strategy == "bollinger":
-                                            # 獲取買入信號
-                                            buy_signals = filtered_df[filtered_df['signal'] == 1]
-                                            # 獲取賣出信號
-                                            sell_signals = filtered_df[filtered_df['signal'] == -1]
-                                            
-                                            # 添加買入標記
-                                            fig.add_trace(go.Scatter(
-                                                x=buy_signals.index,
-                                                y=buy_signals['收盤價'],
-                                                mode='markers',
-                                                name='買入信號',
-                                                marker=dict(symbol='triangle-up', size=10, color='red')
-                                            ))
-                                            
-                                            # 添加賣出標記
-                                            fig.add_trace(go.Scatter(
-                                                x=sell_signals.index,
-                                                y=sell_signals['收盤價'],
-                                                mode='markers',
-                                                name='賣出信號',
-                                                marker=dict(symbol='triangle-down', size=10, color='green')
-                                            ))
-                                        
-                                        fig.update_layout(
-                                            title=f'{stock_options.get(selected_stock, selected_stock)} 布林通道',
-                                            xaxis_title='日期',
-                                            yaxis_title='價格',
-                                            height=600,
-                                            template='plotly_white',
-                                            hovermode='x unified'
-                                        )
-                                        
-                                        st.plotly_chart(fig, use_container_width=True)
-                                        
-                                        # 添加布林通道策略說明
-                                        if selected_strategy == "bollinger":
-                                            st.info(f"""
-                                            **布林通道策略說明**：
-                                            - 當價格觸及或接近下軌時產生買入訊號
-                                            - 當價格觸及或接近上軌時產生賣出訊號
-                                            - 布林通道參數：周期={bollinger_period}，標準差={bollinger_std}
-                                            - 布林通道特別適合震盪行情的市場，在趨勢明顯時可能出現假信號
-                                            """)
-                                        
-                                    elif selected_indicator == "KD指標":
-                                        # 創建兩個子圖
-                                        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                                                   vertical_spacing=0.1, 
-                                                   row_heights=[0.7, 0.3])
-                                        
-                                        # 添加K線圖
-                                        fig.add_trace(go.Candlestick(
-                                            x=filtered_df.index,
-                                            open=filtered_df['開盤價'],
-                                            high=filtered_df['最高價'],
-                                            low=filtered_df['最低價'],
-                                            close=filtered_df['收盤價'],
-                                            name='股價',
-                                            increasing_line_color='red',  # 漲為紅色
-                                            decreasing_line_color='green'  # 跌為綠色
-                                        ), row=1, col=1)
-                                        
-                                        # 添加KD指標
-                                        fig.add_trace(go.Scatter(
-                                            x=filtered_df.index,
-                                            y=filtered_df['K'],
-                                            name='K值',
-                                            line=dict(color='blue', width=1.5)
-                                        ), row=2, col=1)
-                                        
-                                        fig.add_trace(go.Scatter(
-                                            x=filtered_df.index,
-                                            y=filtered_df['D'],
-                                            name='D值',
-                                            line=dict(color='red', width=1.5)
-                                        ), row=2, col=1)
-                                        
-                                        # 添加超買超賣線
-                                        # 超買線（80）
-                                        fig.add_shape(
-                                            type="line",
-                                            x0=filtered_df.index[0],
-                                            y0=80,
-                                            x1=filtered_df.index[-1],
-                                            y1=80,
-                                            line=dict(color="red", width=1, dash="dash"),
-                                            row=2, col=1
-                                        )
-                                        
-                                        # 超賣線（20）
-                                        fig.add_shape(
-                                            type="line",
-                                            x0=filtered_df.index[0],
-                                            y0=20,
-                                            x1=filtered_df.index[-1],
-                                            y1=20,
-                                            line=dict(color="green", width=1, dash="dash"),
-                                            row=2, col=1
-                                        )
-                                        
-                                        # 中間線（50）
-                                        fig.add_shape(
-                                            type="line",
-                                            x0=filtered_df.index[0],
-                                            y0=50,
-                                            x1=filtered_df.index[-1],
-                                            y1=50,
-                                            line=dict(color="gray", width=1, dash="dot"),
-                                            row=2, col=1
-                                        )
-                                        
-                                        # KD黃金交叉/死亡交叉信號 - 可視化交叉點
-                                        if show_signals:
-                                            # 建立個簡單的KD交叉指標
-                                            for i in range(1, len(filtered_df)):
-                                                # 檢查黃金交叉 - K線從下方穿過D線
-                                                if filtered_df['K'].iloc[i-1] < filtered_df['D'].iloc[i-1] and filtered_df['K'].iloc[i] > filtered_df['D'].iloc[i]:
-                                                    fig.add_trace(go.Scatter(
-                                                        x=[filtered_df.index[i]],
-                                                        y=[filtered_df['收盤價'].iloc[i]],
-                                                        mode='markers',
-                                                        name='KD黃金交叉',
-                                                        marker=dict(symbol='star', size=12, color='red'),
-                                                        showlegend=(i==1)  # 只在圖例中顯示一次
-                                                    ), row=1, col=1)
-                                                # 檢查死亡交叉 - K線從上方穿過D線
-                                                elif filtered_df['K'].iloc[i-1] > filtered_df['D'].iloc[i-1] and filtered_df['K'].iloc[i] < filtered_df['D'].iloc[i]:
-                                                    fig.add_trace(go.Scatter(
-                                                        x=[filtered_df.index[i]],
-                                                        y=[filtered_df['收盤價'].iloc[i]],
-                                                        mode='markers',
-                                                        name='KD死亡交叉',
-                                                        marker=dict(symbol='x', size=12, color='green'),
-                                                        showlegend=(i==1)  # 只在圖例中顯示一次
-                                                    ), row=1, col=1)
-                                        
-                                        fig.update_layout(
-                                            title=f'{stock_options.get(selected_stock, selected_stock)} KD指標',
-                                            xaxis_title='日期',
-                                            yaxis_title='價格',
-                                            height=600,
-                                            template='plotly_white',
-                                            hovermode='x unified'
-                                        )
-                                        
-                                        # 更新KD圖表的Y軸範圍，確保顯示0-100
-                                        fig.update_yaxes(range=[0, 100], row=2, col=1)
-                                        
-                                        st.plotly_chart(fig, use_container_width=True)
-                                        
-                                        # 添加KD策略說明
-                                        st.info("""
-                                        **KD指標策略說明**：
-                                        - KD指標是一種衡量超買超賣的動量指標
-                                        - 常見交易訊號：
-                                          - 黃金交叉：K線從下方穿過D線，買入訊號
-                                          - 死亡交叉：K線從上方穿過D線，賣出訊號
-                                        - 當K值和D值同時低於20時為超賣區域，當兩者同時高於80時為超買區域
-                                        - KD指標適合震盪行情，在強勢趨勢市場中可能產生較多假信號
-                                        """)
-                                        
-                        except Exception as e:
-                            st.error(f"繪製技術指標圖表時發生錯誤: {e}")
-                            st.exception(e)
+                        # 優化數據以提高繪圖性能
+                        if len(filtered_df) > 500:
+                            original_len = len(filtered_df)
+                            filtered_df = optimize_for_plotting(filtered_df)
+                            log_message(f"數據點優化: 從 {original_len} 減少到 {len(filtered_df)} 以提高繪圖性能")
+                    except Exception as e:
+                        st.error(f"顯示技術指標圖表時發生錯誤: {e}")
+                        st.exception(e)
                 except Exception as e:
                     st.error(f"執行回測時發生錯誤: {e}")
                     st.exception(e)
@@ -1256,10 +1035,10 @@ def main():
         st.markdown("""
         本回測系統支持以下交易策略：
         
-        1. **均線交叉策略**：利用短期與長期移動平均線的交叉點作為買入與賣出訊號
-        2. **RSI指標策略**：根據相對強弱指標判斷股票超買或超賣狀態
+        1. **移動平均線交叉策略**：利用短期與長期移動平均線的交叉點作為買入與賣出訊號
+        2. **RSI超買超賣策略**：根據相對強弱指標判斷股票超買或超賣狀態
         3. **MACD策略**：結合趨勢跟蹤與動量指標的綜合策略
-        4. **布林通道策略**：利用價格波動的標準差建立價格通道，判斷買賣時機
+        4. **布林通道突破策略**：利用價格突破上軌或下軌作為交易信號
         5. **外資買超策略**：追蹤外資的買賣動向，跟隨外資大戶的交易決策
         
         選擇適合的策略，設置相應參數，即可測試該策略在歷史市場中的表現。
@@ -1268,15 +1047,15 @@ def main():
         
         # 顯示策略概念圖
         strategy_concepts = {
-            "ma_cross": "https://i.imgur.com/JLtQOLd.png",
-            "rsi": "https://i.imgur.com/8NHSVeA.png",
-            "macd": "https://i.imgur.com/oRxa15Z.png",
-            "bollinger": "https://i.imgur.com/xF3NBJp.png",
-            "foreign_buy": "https://i.imgur.com/dRJnAEE.png"
+            "移動平均線交叉": "https://i.imgur.com/JLtQOLd.png",
+            "RSI超買超賣": "https://i.imgur.com/8NHSVeA.png",
+            "MACD交叉": "https://i.imgur.com/oRxa15Z.png",
+            "布林通道突破": "https://i.imgur.com/xF3NBJp.png",
+            "外資買超策略": "https://i.imgur.com/dRJnAEE.png"
         }
         
-        if selected_strategy in strategy_concepts:
-            st.image(strategy_concepts[selected_strategy], caption=f"{strategy_options[selected_strategy]} 概念圖示")
+        if strategy in strategy_concepts:
+            st.image(strategy_concepts[strategy], caption=f"{strategy} 概念圖示")
 
 def foreign_investors_trading():
     """獲取外資買賣超資料
@@ -1319,6 +1098,146 @@ def investment_trust_trading():
         df_sell_top50.index = df_sell_top50.index + 1
     
     return df_buy_top50, df_sell_top50, data_date
+
+# 添加緩存裝飾器到數據獲取函數
+@st.cache_data(ttl=CACHE_TTL['high_freq'])
+def cached_three_data():
+    """緩存包裝的三大法人數據函數"""
+    return three_data()
+
+@st.cache_data(ttl=CACHE_TTL['high_freq'])
+def cached_futures():
+    """緩存包裝的期貨數據函數"""
+    return futures()
+
+@st.cache_data(ttl=CACHE_TTL['medium_freq'])
+def cached_turnover():
+    """緩存包裝的成交量數據函數"""
+    return turnover()
+
+@st.cache_data(ttl=CACHE_TTL['high_freq'])
+def cached_for_ib_common():
+    """緩存包裝的外資投信同買函數"""
+    return for_ib_common()
+
+@st.cache_data(ttl=CACHE_TTL['high_freq'])
+def cached_foreign_investors_trading():
+    """緩存包裝的外資買賣超函數"""
+    return foreign_investors_trading()
+
+@st.cache_data(ttl=CACHE_TTL['high_freq'])
+def cached_investment_trust_trading():
+    """緩存包裝的投信買賣超函數"""
+    return investment_trust_trading()
+
+@st.cache_data(ttl=CACHE_TTL['medium_freq'])
+def cached_exchange_rate():
+    """緩存包裝的匯率函數"""
+    return exchange_rate()
+
+@st.cache_data(ttl=CACHE_TTL['medium_freq'])
+def cached_get_stock_history(stock_code, start_date, end_date):
+    """緩存包裝的股票歷史數據函數"""
+    return get_stock_history(stock_code, start_date, end_date)
+
+@st.cache_data(ttl=CACHE_TTL['medium_freq'])
+def cached_calculate_technical_indicators(df_stock):
+    """緩存包裝的技術指標計算函數"""
+    return calculate_technical_indicators(df_stock)
+
+# 添加通用API調用安全包裝函數
+def safe_api_call(func, *args, fallback_value=None, display_error=True, **kwargs):
+    """安全調用API函數，統一處理異常
+    
+    Args:
+        func: 要調用的函數
+        *args: 傳遞給函數的位置參數
+        fallback_value: 失敗時返回的值
+        display_error: 是否在界面顯示錯誤
+        **kwargs: 傳遞給函數的關鍵字參數
+        
+    Returns:
+        函數調用結果或失敗時的 fallback_value
+    """
+    try:
+        return func(*args, **kwargs)
+    except Exception as e:
+        error_msg = f"API調用錯誤: {func.__name__}, {str(e)}"
+        log_message(error_msg, level="error")
+        if display_error:
+            show_error(error_msg)
+        return fallback_value
+
+# 添加 Streamlit 版本檢測函數
+def detect_streamlit_version():
+    """檢測 Streamlit 版本並決定使用哪個 API"""
+    import streamlit as st
+    version = st.__version__
+    
+    try:
+        major, minor, patch = map(int, version.split('.'))
+        
+        # 假設 1.10.0 版本後支持 query_params
+        if (major > 1) or (major == 1 and minor >= 10):
+            return "new_api"
+        else:
+            return "old_api"
+    except:
+        # 如果無法正確解析版本，預設使用舊 API
+        return "old_api"
+
+# 查詢參數設置函數
+def set_query_params(params):
+    """設置查詢參數，兼容不同版本的 Streamlit"""
+    try:
+        if detect_streamlit_version() == "new_api":
+            for key, value in params.items():
+                st.query_params[key] = value
+        else:
+            st.experimental_set_query_params(**params)
+    except Exception as e:
+        log_message(f"設置查詢參數時出錯: {e}", level="error")
+
+def downsample_dataframe(df, max_points=500):
+    """降低大數據集的採樣率以提高繪圖性能
+    
+    Args:
+        df: 要降採樣的DataFrame
+        max_points: 最大點數
+        
+    Returns:
+        降採樣後的DataFrame
+    """
+    if len(df) <= max_points:
+        return df
+    
+    # 計算採樣間隔
+    sample_rate = max(len(df) // max_points, 1)
+    return df.iloc[::sample_rate].copy()
+
+def optimize_for_plotting(df, target_columns=None, max_points=500):
+    """優化DataFrame以提高繪圖性能
+    
+    Args:
+        df: 輸入的DataFrame
+        target_columns: 需要保留的列，如果為None則保留所有列
+        max_points: 最大數據點數
+        
+    Returns:
+        優化後的DataFrame
+    """
+    # 創建一個副本避免修改原始數據
+    result_df = df.copy()
+    
+    # 如果指定了列，只保留這些列
+    if target_columns:
+        keep_cols = [col for col in target_columns if col in result_df.columns]
+        result_df = result_df[keep_cols]
+    
+    # 降採樣
+    result_df = downsample_dataframe(result_df, max_points)
+    
+    return result_df
 
 if __name__ == "__main__":
     main()

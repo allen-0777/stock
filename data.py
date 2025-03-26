@@ -532,17 +532,41 @@ def format_number(num_str: str) -> float:
 
 @st.cache_data(ttl=86400)
 def get_stock_history(stock_id: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """獲取指定股票的歷史行情數據，優先使用 yfinance 庫，如果 yfinance 失敗則嘗試使用 TWSE API
+    """獲取股票歷史數據
     
     Args:
-        stock_id: 股票代碼，例如 "2330"
+        stock_id: 股票代號，例如 "2330"
         start_date: 開始日期，格式為 "YYYY-MM-DD"
         end_date: 結束日期，格式為 "YYYY-MM-DD"
         
     Returns:
         DataFrame: 股票歷史數據，包含日期、開盤價、最高價、最低價、收盤價、成交量等
     """
-    # 第一种方法：使用 yfinance
+    # 特殊處理用於測試的數據
+    if stock_id == 'TEST':
+        try:
+            test_df = pd.read_csv('example_stock_data.csv')
+            test_df['日期'] = pd.to_datetime(test_df['日期'])
+            test_df.set_index('日期', inplace=True)
+            
+            # 確保測試數據有足夠的交易信號
+            # 計算移動平均線以確保有交叉點
+            test_df['MA5'] = test_df['收盤價'].rolling(window=5).mean()
+            test_df['MA20'] = test_df['收盤價'].rolling(window=20).mean()
+            
+            # 過濾日期範圍
+            start_date = pd.to_datetime(start_date)
+            end_date = pd.to_datetime(end_date)
+            mask = (test_df.index >= start_date) & (test_df.index <= end_date)
+            filtered_df = test_df[mask].copy()
+            
+            log_message(f"返回測試數據，共 {len(filtered_df)} 條記錄")
+            return filtered_df
+        except Exception as e:
+            log_message(f"讀取測試數據時出錯: {e}", level="error")
+            # 如果測試數據讀取失敗，繼續使用正常的數據獲取方法
+    
+    # 正常的數據獲取邏輯
     try:
         log_message(f"使用yfinance獲取 {stock_id} 從 {start_date} 到 {end_date} 的歷史數據")
         
@@ -803,357 +827,368 @@ def calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
 @st.cache_data(ttl=86400)
-def backtest_strategy(df: pd.DataFrame, strategy: str, params: dict, initial_capital: float = 100000.0, 
-                      fee_rate: float = 0.001425, tax_rate: float = 0.003, stop_loss: float = 0.05, 
-                      take_profit: float = 0.2) -> tuple:
-    """執行交易策略回測
+def backtest_strategy(df, strategy, params, initial_capital=100000):
+    """回測交易策略
     
     Args:
-        df: 股票歷史數據 DataFrame (含技術指標)
-        strategy: 策略名稱
-        params: 策略參數
+        df: 股票數據 DataFrame
+        strategy: 策略名稱，例如 "ma_cross", "rsi", "macd", "bollinger", "foreign"
+        params: 策略參數字典
         initial_capital: 初始資金
-        fee_rate: 交易手續費率
-        tax_rate: 交易稅率 (賣出時收取)
-        stop_loss: 停損比例
-        take_profit: 停利比例
         
     Returns:
-        tuple: (交易紀錄DataFrame, 回測結果指標dict, 淨值序列DataFrame)
+        dict: 回測結果，包含績效指標和交易記錄
     """
-    if df.empty:
-        return pd.DataFrame(), {}, pd.DataFrame()
+    log_message(f"開始回測策略: {strategy}, 參數: {params}, 資料長度: {len(df)}")
     
-    # 添加技術指標（如果還沒添加）
-    if 'MA5' not in df.columns:
-        df = calculate_technical_indicators(df)
+    # 檢查數據是否足夠
+    if len(df) < 30:
+        log_message("數據長度不足，無法進行回測", level="warning")
+        return {
+            "success": False,
+            "error": "數據長度不足，無法進行回測",
+            "trades": []
+        }
     
-    # 創建回測結果的數據結構
-    trades = []  # 交易記錄
-    positions = 0  # 持倉數量
-    cash = initial_capital  # 現金
-    buy_price = 0  # 買入價格
-    portfolio_value = []  # 每日投資組合價值
+    # 複製數據框以避免修改原始數據
+    df = df.copy()
     
-    # 實現各種交易策略
-    if strategy == "ma_cross":
-        short_period = params.get('short_ma', 5)
-        long_period = params.get('long_ma', 20)
-        
-        # 確保必要的移動平均線已被計算
-        if f'MA{short_period}' not in df.columns:
-            df[f'MA{short_period}'] = df['收盤價'].rolling(window=short_period).mean()
-        if f'MA{long_period}' not in df.columns:
-            df[f'MA{long_period}'] = df['收盤價'].rolling(window=long_period).mean()
-        
-        # 生成交易信號
-        df['signal'] = 0
-        # 買入信號: 短期均線上穿長期均線
-        df['signal'] = np.where((df[f'MA{short_period}'] > df[f'MA{long_period}']) & 
-                               (df[f'MA{short_period}'].shift(1) <= df[f'MA{long_period}'].shift(1)), 1, df['signal'])
-        # 賣出信號: 短期均線下穿長期均線
-        df['signal'] = np.where((df[f'MA{short_period}'] < df[f'MA{long_period}']) & 
-                               (df[f'MA{short_period}'].shift(1) >= df[f'MA{long_period}'].shift(1)), -1, df['signal'])
+    # 生成信號
+    signals = pd.Series(0, index=df.index)
+    trades = []
+    positions = []
     
-    elif strategy == "rsi":
-        period = params.get('rsi_period', 14)
-        overbought = params.get('rsi_overbought', 70)
-        oversold = params.get('rsi_oversold', 30)
-        
-        # 確保 RSI 已被計算
-        if f'RSI{period}' not in df.columns:
-            df[f'RSI{period}'] = calculate_rsi(df['收盤價'], period)
-        
-        # 生成交易信號
-        df['signal'] = 0
-        # 買入信號: RSI 從超賣區上穿
-        df['signal'] = np.where((df[f'RSI{period}'] > oversold) & (df[f'RSI{period}'].shift(1) <= oversold), 1, df['signal'])
-        # 賣出信號: RSI 從超買區下穿
-        df['signal'] = np.where((df[f'RSI{period}'] < overbought) & (df[f'RSI{period}'].shift(1) >= overbought), -1, df['signal'])
-    
-    elif strategy == "macd":
-        fast = params.get('macd_fast', 12)
-        slow = params.get('macd_slow', 26)
-        signal_period = params.get('macd_signal', 9)
-        
-        # 確保 MACD 已被計算
-        if 'MACD' not in df.columns or 'MACD_Signal' not in df.columns:
-            df['MACD'], df['MACD_Signal'], df['MACD_Hist'] = calculate_macd(df['收盤價'], fast, slow, signal_period)
-        
-        # 生成交易信號
-        df['signal'] = 0
-        # 買入信號: MACD 線上穿 Signal 線
-        df['signal'] = np.where((df['MACD'] > df['MACD_Signal']) & (df['MACD'].shift(1) <= df['MACD_Signal'].shift(1)), 1, df['signal'])
-        # 賣出信號: MACD 線下穿 Signal 線
-        df['signal'] = np.where((df['MACD'] < df['MACD_Signal']) & (df['MACD'].shift(1) >= df['MACD_Signal'].shift(1)), -1, df['signal'])
-    
-    elif strategy == "bollinger":
-        period = params.get('bollinger_period', 20)
-        std_dev = params.get('bollinger_std', 2.0)
-        
-        # 確保布林帶已被計算
-        if 'BB_Upper' not in df.columns or 'BB_Lower' not in df.columns:
-            df['BB_Upper'], df['BB_Middle'], df['BB_Lower'] = calculate_bollinger_bands(df['收盤價'], period, std_dev)
-        
-        # 生成交易信號
-        df['signal'] = 0
-        # 買入信號: 價格接近下軌 (距離下軌不超過1%的距離)
-        df['signal'] = np.where(df['收盤價'] <= df['BB_Lower'] * 1.01, 1, df['signal'])
-        # 賣出信號: 價格接近上軌 (距離上軌不超過1%的距離)
-        df['signal'] = np.where(df['收盤價'] >= df['BB_Upper'] * 0.99, -1, df['signal'])
-    
-    elif strategy == "foreign_buy":
-        threshold = params.get('foreign_buy_threshold', 1000)
-        # 這個策略需要外資買賣超資料，但我們目前沒有每日的外資數據
-        # 這裡僅作為示範，使用成交量作為替代
-        
-        # 生成交易信號 (使用成交量相對於平均的變化作為代理)
-        df['signal'] = 0
-        df['Volume_Ratio'] = df['成交股數'] / df['Volume_MA20']
-        # 買入信號: 成交量顯著高於平均 (假設這表示外資買超)
-        df['signal'] = np.where(df['Volume_Ratio'] > 1.5, 1, df['signal'])
-        # 賣出信號: 成交量顯著低於平均 (假設這表示外資賣超)
-        df['signal'] = np.where(df['Volume_Ratio'] < 0.5, -1, df['signal'])
-    
-    else:
-        # 如果策略不匹配，則沒有交易信號
-        df['signal'] = 0
-    
-    # 執行回測
-    for i, (index, row) in enumerate(df.iterrows()):
-        # 修改 NaN 檢查方式，避免 Series 的真值模糊錯誤
-        if isinstance(row['signal'], pd.Series):
-            if row['signal'].isna().any():
-                continue
-        else:
-            if pd.isna(row['signal']):
-                continue
+    try:
+        # 計算技術指標
+        if strategy in ["ma_cross", "移動平均線交叉"]:
+            # 移動平均線交叉策略
+            short_window = params.get("short_window", 5)
+            long_window = params.get("long_window", 20)
             
-        # 記錄當前組合價值
-        current_value = cash
-        if positions > 0:
-            # 確保收盤價是數值而不是Series
-            current_price = row['收盤價']
-            if isinstance(current_price, pd.Series):
-                current_price = current_price.iloc[0] if len(current_price) > 0 else 0
-            current_value += positions * current_price
-        portfolio_value.append((index, current_value))
-        
-        # 根據交易信號執行交易
-        # 使用更安全的比較方式，避免與 Series 比較時的模糊性
-        is_buy_signal = False
-        is_sell_signal = False
-        
-        if isinstance(row['signal'], pd.Series):
-            # 如果是 Series，檢查第一個元素
-            if len(row['signal']) > 0:
-                is_buy_signal = row['signal'].iloc[0] == 1
-                is_sell_signal = row['signal'].iloc[0] == -1
-        else:
-            # 如果是純量值
-            is_buy_signal = row['signal'] == 1
-            is_sell_signal = row['signal'] == -1
-        
-        # 檢查停損/停利條件 (如果有持倉)
-        if positions > 0:
-            # 確保收盤價是數值
-            current_price = row['收盤價']
-            if isinstance(current_price, pd.Series):
-                current_price = current_price.iloc[0] if len(current_price) > 0 else 0
-                
-            price_change = (current_price - buy_price) / buy_price
-            if price_change <= -stop_loss:
-                # 觸發停損
-                sell_amount = positions * current_price
-                fee = sell_amount * fee_rate
-                tax = sell_amount * tax_rate
-                cash += sell_amount - fee - tax
-                
-                trades.append({
-                    "日期": index,
-                    "類型": "停損賣出",
-                    "價格": current_price,
-                    "數量": positions,
-                    "交易額": sell_amount,
-                    "手續費": fee,
-                    "稅額": tax,
-                    "淨利": (current_price - buy_price) * positions - fee - tax
-                })
-                
-                positions = 0
-                buy_price = 0
-                continue
+            # 檢查窗口大小是否合理
+            if short_window >= long_window:
+                log_message(f"短期窗口 {short_window} 必須小於長期窗口 {long_window}", level="warning")
+                return {
+                    "success": False,
+                    "error": f"短期窗口 {short_window} 必須小於長期窗口 {long_window}",
+                    "trades": []
+                }
             
-            if price_change >= take_profit:
-                # 觸發停利
-                sell_amount = positions * current_price
-                fee = sell_amount * fee_rate
-                tax = sell_amount * tax_rate
-                cash += sell_amount - fee - tax
-                
-                trades.append({
-                    "日期": index,
-                    "類型": "停利賣出",
-                    "價格": current_price,
-                    "數量": positions,
-                    "交易額": sell_amount,
-                    "手續費": fee,
-                    "稅額": tax,
-                    "淨利": (current_price - buy_price) * positions - fee - tax
-                })
-                
-                positions = 0
-                buy_price = 0
-                continue
-        
-        # 根據交易信號執行交易
-        if is_buy_signal and positions == 0:
-            # 買入信號
-            # 確保收盤價是數值
-            current_price = row['收盤價']
-            if isinstance(current_price, pd.Series):
-                current_price = current_price.iloc[0] if len(current_price) > 0 else 0
-                
-            max_shares = int(cash / (current_price * (1 + fee_rate)))
-            if max_shares > 0:
-                positions = max_shares
-                buy_price = current_price
-                buy_amount = positions * buy_price
-                fee = buy_amount * fee_rate
-                cash -= (buy_amount + fee)
-                
-                trades.append({
-                    "日期": index,
-                    "類型": "買入",
-                    "價格": buy_price,
-                    "數量": positions,
-                    "交易額": buy_amount,
-                    "手續費": fee,
-                    "稅額": 0,
-                    "淨利": 0
-                })
-        
-        elif is_sell_signal and positions > 0:
-            # 賣出信號
-            # 確保收盤價是數值
-            current_price = row['收盤價']
-            if isinstance(current_price, pd.Series):
-                current_price = current_price.iloc[0] if len(current_price) > 0 else 0
-                
-            sell_amount = positions * current_price
-            fee = sell_amount * fee_rate
-            tax = sell_amount * tax_rate
-            cash += sell_amount - fee - tax
+            df['MA_short'] = df['收盤價'].rolling(window=short_window).mean()
+            df['MA_long'] = df['收盤價'].rolling(window=long_window).mean()
             
-            trades.append({
-                "日期": index,
-                "類型": "賣出",
-                "價格": current_price,
-                "數量": positions,
-                "交易額": sell_amount,
-                "手續費": fee,
-                "稅額": tax,
-                "淨利": (current_price - buy_price) * positions - fee - tax
-            })
+            log_message(f"計算了短期均線 (MA{short_window}) 和長期均線 (MA{long_window})")
             
-            positions = 0
-            buy_price = 0
-    
-    # 如果結束時還有持倉，則進行平倉
-    if positions > 0 and len(df) > 0:
-        # 確保最後的收盤價是純量值
-        last_price = df['收盤價'].iloc[-1]
-        if isinstance(last_price, pd.Series):
-            last_price = last_price.iloc[0] if len(last_price) > 0 else 0
+            # 生成交叉信號
+            for i in range(long_window + 1, len(df)):
+                # 金叉: 短期均線從下方穿過長期均線
+                if df['MA_short'].iloc[i-1] <= df['MA_long'].iloc[i-1] and df['MA_short'].iloc[i] > df['MA_long'].iloc[i]:
+                    signals.iloc[i] = 1
+                    date_str = df.index[i].strftime('%Y-%m-%d')
+                    price = float(df['收盤價'].iloc[i])  # 確保價格是標量
+                    trades.append({
+                        "日期": date_str,
+                        "類型": "買入",
+                        "價格": price,
+                        "原因": f"金叉: MA{short_window}({float(df['MA_short'].iloc[i]):.2f}) > MA{long_window}({float(df['MA_long'].iloc[i]):.2f})"
+                    })
+                    log_message(f"[{date_str}] 產生買入信號，價格: {price:.2f}，原因: 金叉")
+                
+                # 死叉: 短期均線從上方穿過長期均線
+                elif df['MA_short'].iloc[i-1] >= df['MA_long'].iloc[i-1] and df['MA_short'].iloc[i] < df['MA_long'].iloc[i]:
+                    signals.iloc[i] = -1
+                    date_str = df.index[i].strftime('%Y-%m-%d')
+                    price = float(df['收盤價'].iloc[i])  # 確保價格是標量
+                    trades.append({
+                        "日期": date_str,
+                        "類型": "賣出",
+                        "價格": price,
+                        "原因": f"死叉: MA{short_window}({float(df['MA_short'].iloc[i]):.2f}) < MA{long_window}({float(df['MA_long'].iloc[i]):.2f})"
+                    })
+                    log_message(f"[{date_str}] 產生賣出信號，價格: {price:.2f}，原因: 死叉")
+        
+        elif strategy in ["rsi", "RSI超買超賣"]:
+            # RSI超買超賣策略
+            rsi_period = params.get("rsi_period", 14)
+            overbought = params.get("overbought", 70)
+            oversold = params.get("oversold", 30)
             
-        sell_amount = positions * last_price
-        fee = sell_amount * fee_rate
-        tax = sell_amount * tax_rate
-        cash += sell_amount - fee - tax
+            # 檢查參數是否合理
+            if overbought <= oversold:
+                log_message(f"超買閾值 {overbought} 必須大於超賣閾值 {oversold}", level="warning")
+                return {
+                    "success": False,
+                    "error": f"超買閾值 {overbought} 必須大於超賣閾值 {oversold}",
+                    "trades": []
+                }
+            
+            # 計算RSI
+            delta = df['收盤價'].diff()
+            gain = delta.where(delta > 0, 0)
+            loss = -delta.where(delta < 0, 0)
+            
+            avg_gain = gain.rolling(window=rsi_period).mean()
+            avg_loss = loss.rolling(window=rsi_period).mean()
+            
+            rs = avg_gain / avg_loss
+            df['RSI'] = 100 - (100 / (1 + rs))
+            
+            log_message(f"計算了 RSI({rsi_period}) 指標，超買閾值: {overbought}, 超賣閾值: {oversold}")
+            
+            # 生成RSI信號
+            prev_was_oversold = False
+            prev_was_overbought = False
+            
+            for i in range(rsi_period + 1, len(df)):
+                current_rsi = df['RSI'].iloc[i]
+                prev_rsi = df['RSI'].iloc[i-1]
+                
+                # 超賣後反彈
+                if prev_rsi < oversold and current_rsi >= oversold and not prev_was_oversold:
+                    signals.iloc[i] = 1
+                    date_str = df.index[i].strftime('%Y-%m-%d')
+                    price = float(df['收盤價'].iloc[i])  # 確保價格是標量
+                    trades.append({
+                        "日期": date_str,
+                        "類型": "買入",
+                        "價格": price,
+                        "原因": f"RSI從超賣區域反彈: {float(prev_rsi):.2f} -> {float(current_rsi):.2f}"
+                    })
+                    log_message(f"[{date_str}] 產生買入信號，價格: {price:.2f}，原因: RSI從超賣區域反彈")
+                    prev_was_oversold = True
+                elif current_rsi >= overbought:
+                    prev_was_oversold = False
+                
+                # 超買後回落
+                if prev_rsi > overbought and current_rsi <= overbought and not prev_was_overbought:
+                    signals.iloc[i] = -1
+                    date_str = df.index[i].strftime('%Y-%m-%d')
+                    price = float(df['收盤價'].iloc[i])  # 確保價格是標量
+                    trades.append({
+                        "日期": date_str,
+                        "類型": "賣出",
+                        "價格": price,
+                        "原因": f"RSI從超買區域回落: {float(prev_rsi):.2f} -> {float(current_rsi):.2f}"
+                    })
+                    log_message(f"[{date_str}] 產生賣出信號，價格: {price:.2f}，原因: RSI從超買區域回落")
+                    prev_was_overbought = True
+                elif current_rsi <= oversold:
+                    prev_was_overbought = False
         
-        trades.append({
-            "日期": df.index[-1],
-            "類型": "平倉賣出",
-            "價格": last_price,
-            "數量": positions,
-            "交易額": sell_amount,
-            "手續費": fee,
-            "稅額": tax,
-            "淨利": (last_price - buy_price) * positions - fee - tax
-        })
-    
-    # 創建交易記錄 DataFrame
-    trades_df = pd.DataFrame(trades)
-    
-    # 創建資產淨值序列 DataFrame
-    portfolio_df = pd.DataFrame(portfolio_value, columns=['日期', '淨值'])
-    if not portfolio_df.empty:
-        portfolio_df.set_index('日期', inplace=True)
-    
-    # 計算回測結果指標
-    backtest_results = {}
-    
-    if not trades_df.empty:
-        # 總收益
-        total_profit = trades_df['淨利'].sum()
-        total_return = total_profit / initial_capital
+        elif strategy in ["macd", "MACD交叉"]:
+            # MACD交叉策略
+            fast_period = params.get("fast_period", 12)
+            slow_period = params.get("slow_period", 26)
+            signal_period = params.get("signal_period", 9)
+            
+            # 計算MACD
+            exp1 = df['收盤價'].ewm(span=fast_period, adjust=False).mean()
+            exp2 = df['收盤價'].ewm(span=slow_period, adjust=False).mean()
+            macd = exp1 - exp2
+            signal = macd.ewm(span=signal_period, adjust=False).mean()
+            df['MACD'] = macd
+            df['MACD_Signal'] = signal
+            df['MACD_Hist'] = macd - signal
+            
+            log_message(f"計算了MACD指標，快週期: {fast_period}, 慢週期: {slow_period}, 信號週期: {signal_period}")
+            
+            # 生成MACD交叉信號
+            for i in range(slow_period + signal_period, len(df)):
+                # 金叉：MACD線上穿信號線
+                if df['MACD'].iloc[i-1] <= df['MACD_Signal'].iloc[i-1] and df['MACD'].iloc[i] > df['MACD_Signal'].iloc[i]:
+                    signals.iloc[i] = 1
+                    date_str = df.index[i].strftime('%Y-%m-%d')
+                    price = float(df['收盤價'].iloc[i])  # 確保價格是標量
+                    trades.append({
+                        "日期": date_str,
+                        "類型": "買入",
+                        "價格": price,
+                        "原因": f"MACD金叉: {float(df['MACD'].iloc[i]):.2f} > {float(df['MACD_Signal'].iloc[i]):.2f}"
+                    })
+                    log_message(f"[{date_str}] 產生買入信號，價格: {price:.2f}，原因: MACD金叉")
+                
+                # 死叉：MACD線下穿信號線
+                elif df['MACD'].iloc[i-1] >= df['MACD_Signal'].iloc[i-1] and df['MACD'].iloc[i] < df['MACD_Signal'].iloc[i]:
+                    signals.iloc[i] = -1
+                    date_str = df.index[i].strftime('%Y-%m-%d')
+                    price = float(df['收盤價'].iloc[i])  # 確保價格是標量
+                    trades.append({
+                        "日期": date_str,
+                        "類型": "賣出",
+                        "價格": price,
+                        "原因": f"MACD死叉: {float(df['MACD'].iloc[i]):.2f} < {float(df['MACD_Signal'].iloc[i]):.2f}"
+                    })
+                    log_message(f"[{date_str}] 產生賣出信號，價格: {price:.2f}，原因: MACD死叉")
         
-        # 交易次數
-        num_trades = len(trades_df[trades_df['類型'].isin(['買入', '賣出', '停損賣出', '停利賣出', '平倉賣出'])])
-        win_trades = len(trades_df[trades_df['淨利'] > 0])
+        elif strategy in ["bollinger", "布林通道突破"]:
+            # 布林通道突破策略
+            bollinger_period = params.get("bollinger_period", 20)
+            num_std = params.get("num_std", 2.0)
+            
+            # 計算布林通道
+            df['BB_Middle'] = df['收盤價'].rolling(window=bollinger_period).mean()
+            df['BB_Std'] = df['收盤價'].rolling(window=bollinger_period).std()
+            df['BB_Upper'] = df['BB_Middle'] + (df['BB_Std'] * num_std)
+            df['BB_Lower'] = df['BB_Middle'] - (df['BB_Std'] * num_std)
+            
+            log_message(f"計算了布林通道，週期: {bollinger_period}, 標準差倍數: {num_std}")
+            
+            # 生成布林通道突破信號
+            for i in range(bollinger_period + 1, len(df)):
+                # 價格突破下軌（超賣）
+                if df['收盤價'].iloc[i-1] >= df['BB_Lower'].iloc[i-1] and df['收盤價'].iloc[i] < df['BB_Lower'].iloc[i]:
+                    signals.iloc[i] = 1
+                    date_str = df.index[i].strftime('%Y-%m-%d')
+                    price = float(df['收盤價'].iloc[i])  # 確保價格是標量
+                    trades.append({
+                        "日期": date_str,
+                        "類型": "買入",
+                        "價格": price,
+                        "原因": f"價格突破布林下軌: {price:.2f} < {float(df['BB_Lower'].iloc[i]):.2f}"
+                    })
+                    log_message(f"[{date_str}] 產生買入信號，價格: {price:.2f}，原因: 突破布林下軌")
+                
+                # 價格突破上軌（超買）
+                elif df['收盤價'].iloc[i-1] <= df['BB_Upper'].iloc[i-1] and df['收盤價'].iloc[i] > df['BB_Upper'].iloc[i]:
+                    signals.iloc[i] = -1
+                    date_str = df.index[i].strftime('%Y-%m-%d')
+                    price = float(df['收盤價'].iloc[i])  # 確保價格是標量
+                    trades.append({
+                        "日期": date_str,
+                        "類型": "賣出",
+                        "價格": price,
+                        "原因": f"價格突破布林上軌: {price:.2f} > {float(df['BB_Upper'].iloc[i]):.2f}"
+                    })
+                    log_message(f"[{date_str}] 產生賣出信號，價格: {price:.2f}，原因: 突破布林上軌")
         
-        # 勝率
-        win_rate = win_trades / num_trades if num_trades > 0 else 0
+        elif strategy in ["foreign", "外資買超"]:
+            # 外資買超策略
+            log_message("外資買超策略目前未實現，將來會加入")
         
-        # 盈虧比
-        avg_profit = trades_df[trades_df['淨利'] > 0]['淨利'].mean() if len(trades_df[trades_df['淨利'] > 0]) > 0 else 0
-        avg_loss = abs(trades_df[trades_df['淨利'] < 0]['淨利'].mean()) if len(trades_df[trades_df['淨利'] < 0]) > 0 else 1
-        profit_loss_ratio = avg_profit / avg_loss if avg_loss > 0 else 0
+        log_message(f"信號生成完成，共有買入信號 {len([s for s in signals if s == 1])} 個，賣出信號 {len([s for s in signals if s == -1])} 個")
+        
+        # 如果沒有產生任何交易信號，返回錯誤
+        if len(trades) == 0:
+            log_message("沒有產生任何交易信號", level="warning")
+            return {
+                "success": False,
+                "error": "沒有產生任何交易信號，請調整策略參數或選擇更長的回測期間",
+                "trades": []
+            }
+        
+        # 執行回測
+        # 假設每次交易使用全部資金
+        cash = float(initial_capital)
+        shares = 0.0
+        equity = []
+        benchmark = []
+        
+        for i in range(len(df)):
+            price = float(df['收盤價'].iloc[i])  # 確保價格是標量
+            
+            if signals.iloc[i] == 1:  # 買入信號
+                if cash > 0:
+                    shares = cash / price
+                    cash = 0.0
+                    positions.append({
+                        "日期": df.index[i].strftime('%Y-%m-%d'),
+                        "操作": "買入",
+                        "價格": price,
+                        "股數": shares,
+                        "現金": cash,
+                        "總值": shares * price + cash
+                    })
+            elif signals.iloc[i] == -1:  # 賣出信號
+                if shares > 0:
+                    cash = shares * price
+                    shares = 0.0
+                    positions.append({
+                        "日期": df.index[i].strftime('%Y-%m-%d'),
+                        "操作": "賣出",
+                        "價格": price,
+                        "股數": 0.0,
+                        "現金": cash,
+                        "總值": cash
+                    })
+            
+            # 更新每日權益
+            current_equity = shares * price + cash
+            equity.append(current_equity)
+            
+            # 計算基準
+            first_price = float(df['收盤價'].iloc[0])  # 確保第一天價格是標量
+            benchmark_shares = initial_capital / first_price
+            benchmark_value = benchmark_shares * price
+            benchmark.append(benchmark_value)
+        
+        # 創建權益曲線
+        portfolio_df = pd.DataFrame({
+            '淨值': equity,
+            '基準淨值': benchmark
+        }, index=df.index)
+        
+        # 計算績效指標
+        initial_capital_float = float(initial_capital)
+        final_equity = float(portfolio_df['淨值'].iloc[-1])
+        total_return = (final_equity / initial_capital_float - 1) * 100
+        
+        # 計算年化收益率
+        days = (df.index[-1] - df.index[0]).days
+        annualized_return = ((1 + total_return / 100) ** (365 / days) - 1) * 100 if days > 0 else 0
+        
+        # 買入並持有收益率
+        final_benchmark = float(benchmark[-1])
+        buy_hold_return = (final_benchmark / initial_capital_float - 1) * 100
+        
+        # 夏普比率（假設無風險利率為 0）
+        daily_returns = portfolio_df['淨值'].pct_change().dropna()
+        sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if len(daily_returns) > 0 and daily_returns.std() != 0 else 0
         
         # 最大回撤
-        if not portfolio_df.empty:
-            portfolio_df['累計最大值'] = portfolio_df['淨值'].cummax()
-            portfolio_df['回撤'] = (portfolio_df['淨值'] - portfolio_df['累計最大值']) / portfolio_df['累計最大值']
-            max_drawdown = portfolio_df['回撤'].min()
-        else:
-            max_drawdown = 0
-            
-        # 回測持續時間（天）
-        if len(df) >= 2:
-            first_date = pd.to_datetime(df.index[0])
-            last_date = pd.to_datetime(df.index[-1])
-            duration_days = (last_date - first_date).days
-            
-            # 年化收益率
-            annual_return = ((1 + total_return) ** (365 / duration_days)) - 1 if duration_days > 0 else 0
-        else:
-            duration_days = 0
-            annual_return = 0
+        cumulative_max = portfolio_df['淨值'].cummax()
+        drawdown = (portfolio_df['淨值'] / cumulative_max - 1) * 100
+        max_drawdown = float(drawdown.min()) if not drawdown.empty else 0
         
-        # 填充結果
-        backtest_results = {
-            "總報酬率": f"{total_return:.2%}",
-            "年化報酬率": f"{annual_return:.2%}",
-            "總獲利": f"{total_profit:.2f}",
-            "交易次數": f"{num_trades}次",
-            "勝率": f"{win_rate:.2%}",
+        # 計算勝率和其他指標時確保使用標量比較
+        win_trades = [t for t in positions if t['操作'] == '賣出' and float(t['現金']) > initial_capital_float]
+        total_sell_trades = [t for t in positions if t['操作'] == '賣出']
+        win_rate = len(win_trades) / len(total_sell_trades) * 100 if len(total_sell_trades) > 0 else 0
+        
+        # 計算賺賠比
+        if len(win_trades) > 0 and len(total_sell_trades) - len(win_trades) > 0:
+            avg_win = sum([(float(t['現金']) - initial_capital_float) for t in win_trades]) / len(win_trades)
+            lose_trades = [t for t in positions if t['操作'] == '賣出' and float(t['現金']) <= initial_capital_float]
+            avg_lose = sum([(initial_capital_float - float(t['現金'])) for t in lose_trades]) / len(lose_trades) if len(lose_trades) > 0 else 1
+            profit_loss_ratio = abs(avg_win / avg_lose) if avg_lose != 0 else 0
+        else:
+            profit_loss_ratio = 0
+        
+        log_message(f"回測完成，總收益率: {total_return:.2f}%，年化收益率: {annualized_return:.2f}%，最大回撤: {max_drawdown:.2f}%")
+        
+        # 返回回測結果
+        return {
+            "success": True,
+            "總收益率": f"{total_return:.2f}%",
+            "年化收益率": f"{annualized_return:.2f}%",
+            "買入並持有收益率": f"{buy_hold_return:.2f}%",
+            "夏普比率": f"{sharpe_ratio:.2f}",
+            "最大回撤": f"{max_drawdown:.2f}%",
+            "勝率": f"{win_rate:.2f}%",
             "盈虧比": f"{profit_loss_ratio:.2f}",
-            "最大回撤": f"{max_drawdown:.2%}",
-            "持倉時間": f"{duration_days}天"
+            "交易次數": len([t for t in positions if t['操作'] == '買入']),
+            "portfolio_df": portfolio_df,
+            "trades": trades,
+            "positions": positions
         }
-    else:
-        backtest_results = {
-            "總報酬率": "0.00%",
-            "年化報酬率": "0.00%",
-            "總獲利": "0.00",
-            "交易次數": "0次",
-            "勝率": "0.00%",
-            "盈虧比": "0.00",
-            "最大回撤": "0.00%",
-            "持倉時間": "0天"
+    except Exception as e:
+        log_message(f"回測過程中出錯: {str(e)}", level="error")
+        import traceback
+        log_message(traceback.format_exc(), level="error")
+        return {
+            "success": False,
+            "error": f"回測過程中出錯: {str(e)}",
+            "trades": []
         }
-    
-    return trades_df, backtest_results, portfolio_df
 
 def exception_handler(default_return=None):
     """異常處理裝飾器
