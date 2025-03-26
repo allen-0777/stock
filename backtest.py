@@ -32,14 +32,29 @@ def get_stock_data(stock_code, start_date, end_date):
                 stock_code = f"{stock_code}.TW"   # 上市股票
             
         log_message(f"獲取 {stock_code} 從 {start_date} 到 {end_date} 的股票數據")
-        data = yf.download(stock_code, start=start_date, end=end_date, progress=False)
         
-        if data.empty:
-            log_message(f"無法獲取 {stock_code} 的股票數據", level="warning")
-            return pd.DataFrame()
-            
-        log_message(f"成功獲取 {stock_code} 的股票數據，共 {len(data)} 條記錄")
-        return data
+        # 增加重試机制
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                data = yf.download(stock_code, start=start_date, end=end_date, progress=False, timeout=15)
+                
+                if data.empty and attempt < max_retries - 1:
+                    log_message(f"嘗試 {attempt+1}/{max_retries}: 獲取 {stock_code} 數據為空，重試...", level="warning")
+                    continue
+                    
+                if data.empty:
+                    log_message(f"無法獲取 {stock_code} 的股票數據", level="warning")
+                    return pd.DataFrame()
+                    
+                log_message(f"成功獲取 {stock_code} 的股票數據，共 {len(data)} 條記錄")
+                return data
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    log_message(f"嘗試 {attempt+1}/{max_retries}: 獲取 {stock_code} 數據時出錯: {str(e)}，重試...", level="warning")
+                    continue
+                raise  # 重試次數用完後，拋出異常
+                
     except Exception as e:
         log_message(f"獲取 {stock_code} 股票數據時發生錯誤: {str(e)}", level="error")
         return pd.DataFrame()

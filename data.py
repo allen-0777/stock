@@ -14,6 +14,41 @@ import functools
 from concurrent.futures import ThreadPoolExecutor
 from typing import Tuple, List, Dict, Any, Optional
 import yfinance as yf
+import logging
+
+# 配置日誌系統
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+logger = logging.getLogger("台股分析")
+
+def log_message(message: str, level: str = "info") -> None:
+    """統一的日誌記錄函數
+    
+    Args:
+        message: 要記錄的消息
+        level: 日誌級別，可以是 "debug", "info", "warning", "error" 或 "critical"
+    """
+    level = level.lower()
+    if level == "debug":
+        logger.debug(message)
+    elif level == "info":
+        logger.info(message)
+        print(message)  # 同時打印到控制台
+    elif level == "warning":
+        logger.warning(message)
+        print(f"警告: {message}")
+    elif level == "error":
+        logger.error(message)
+        print(f"錯誤: {message}")
+    elif level == "critical":
+        logger.critical(message)
+        print(f"嚴重錯誤: {message}")
+    else:
+        logger.info(message)
+        print(message)
 
 # 忽略不安全請求的警告
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
@@ -37,7 +72,7 @@ def make_request(url: str, max_retries: int = 3, backoff_factor: float = 0.5) ->
             return response
         except requests.RequestException as e:
             if i == max_retries - 1:  # 最後一次重試
-                print(f"獲取數據失敗: {url}, 錯誤: {e}")
+                log_message(f"獲取數據失敗: {url}, 錯誤: {e}", level="error")
                 raise
             wait_time = backoff_factor * (2 ** i)  # 指數退避策略
             time.sleep(wait_time)
@@ -52,7 +87,7 @@ async def fetch_data_async(datestr):
                 data = response.json()
                 return data
         except (httpx.RequestError, httpx.HTTPStatusError, json.JSONDecodeError) as e:
-            print(f"非同步請求失敗: {url}, 錯誤: {e}, 稍後重試...")
+            log_message(f"非同步請求失敗: {url}, 錯誤: {e}, 稍後重試...", level="warning")
             await asyncio.sleep(1)  # 重試前等待 1 秒
     
     # 如果所有重試都失敗，返回空數據結構
@@ -73,21 +108,21 @@ def fetch_data(max_attempts=5) -> Tuple[pd.DataFrame, str]:
             data = asyncio.run(fetch_data_async(datestr))
             
             if data.get("total", 1) == 0 or not data.get("data"):
-                print(f"日期 {datestr} 沒有數據，嘗試前一天。")
+                log_message(f"日期 {datestr} 沒有數據，嘗試前一天。")
                 now -= timedelta(days=1)
                 continue
             
             df = pd.DataFrame(data["data"], columns=data["fields"])
             return df, now.strftime("%Y-%m-%d")
         except Exception as e:
-            print(f"獲取數據時出錯: {e}, 嘗試前一天數據。")
+            log_message(f"獲取數據時出錯: {e}, 嘗試前一天數據。")
             now -= timedelta(days=1)
     
     # 如果所有嘗試都失敗，返回空 DataFrame
-    print("警告：所有數據獲取嘗試都失敗了")
+    log_message("警告：所有數據獲取嘗試都失敗了")
     return pd.DataFrame(), ""
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def three_data() -> Tuple[pd.DataFrame, str]:
     """獲取三大法人數據
     
@@ -101,7 +136,7 @@ def three_data() -> Tuple[pd.DataFrame, str]:
         data = response.json()
         
         if not data.get("data"):
-            print("警告：三大法人數據為空")
+            log_message("警告：三大法人數據為空")
             # 返回空的 DataFrame 但保持正確的結構
             return pd.DataFrame(columns=['單位名稱', '買賣差']), data.get("date", "")
         
@@ -111,11 +146,11 @@ def three_data() -> Tuple[pd.DataFrame, str]:
         df['買賣差'] = pd.to_numeric(df['買賣差額'].str.replace(',', ''), errors='coerce') / 1e8
         return df[['單位名稱', '買賣差']], data_date
     except Exception as e:
-        print(f"獲取三大法人數據時出錯: {e}")
+        log_message(f"獲取三大法人數據時出錯: {e}")
         # 返回空的 DataFrame
         return pd.DataFrame(columns=['單位名稱', '買賣差']), ""
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def turnover() -> pd.DataFrame:
     """獲取成交量數據
     
@@ -131,7 +166,7 @@ def turnover() -> pd.DataFrame:
         data = response.json()
         
         if not data.get("data"):
-            print("警告：成交量數據為空")
+            log_message("警告：成交量數據為空")
             return pd.DataFrame(columns=['日期', '成交量', '漲跌點數'])
         
         data_list = data["data"]
@@ -143,10 +178,10 @@ def turnover() -> pd.DataFrame:
 
         return new_df
     except Exception as e:
-        print(f"獲取成交量數據時出錯: {e}")
+        log_message(f"獲取成交量數據時出錯: {e}")
         return pd.DataFrame(columns=['日期', '成交量', '漲跌點數'])
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def for_buy_sell() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
     """獲取外資買賣超數據
     
@@ -181,12 +216,12 @@ def for_buy_sell() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
         
         return df_for_all, df_buy_top50, df_sell_top50, data_date
     except Exception as e:
-        print(f"獲取外資買賣超數據時出錯: {e}")
+        log_message(f"獲取外資買賣超數據時出錯: {e}")
         # 返回空的 DataFrame
         empty_df = pd.DataFrame(columns=['證券代號', '證券名稱', '外資買賣超股數'])
         return empty_df, empty_df, empty_df, ""
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def ib_buy_sell() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
     """獲取投信買賣超數據
     
@@ -217,12 +252,12 @@ def ib_buy_sell() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
         
         return df_ib_all, df_buy_top50, df_sell_top50, data_date
     except Exception as e:
-        print(f"獲取投信買賣超數據時出錯: {e}")
+        log_message(f"獲取投信買賣超數據時出錯: {e}")
         # 返回空的 DataFrame
         empty_df = pd.DataFrame(columns=['證券代號', '證券名稱', '投信買賣超股數'])
         return empty_df, empty_df, empty_df, ""
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def for_ib_common() -> Tuple[pd.DataFrame, str]:
     """獲取外資和投信同時買超的股票
     
@@ -255,11 +290,11 @@ def for_ib_common() -> Tuple[pd.DataFrame, str]:
         
         return df_com_buy, data_date
     except Exception as e:
-        print(f"獲取外資投信同買數據時出錯: {e}")
+        log_message(f"獲取外資投信同買數據時出錯: {e}")
         # 返回空的 DataFrame
         return pd.DataFrame(columns=['證券代號', '證券名稱', '外資買賣超股數', '投信買賣超股數']), ""
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=7200)
 def exchange_rate() -> pd.DataFrame:
     """獲取匯率數據
     
@@ -275,14 +310,14 @@ def exchange_rate() -> pd.DataFrame:
         rate_table = html.find(name='table', attrs={'title':'牌告匯率'})
         
         if not rate_table:
-            print("警告：匯率表格未找到")
+            log_message("警告：匯率表格未找到")
             # 返回空的 DataFrame 但保持正確的結構
             return pd.DataFrame(columns=['buy_rate', 'sell_rate'])
             
         rate_table = rate_table.find(name='tbody').find_all(name='tr')
         
         if not rate_table:
-            print("警告：匯率表格行未找到")
+            log_message("警告：匯率表格行未找到")
             return pd.DataFrame(columns=['buy_rate', 'sell_rate'])
 
         # 直接使用美金匯率歷史資料的 URL
@@ -294,13 +329,13 @@ def exchange_rate() -> pd.DataFrame:
         history_table = history.find(name='table', attrs={'title':'歷史本行營業時間牌告匯率'})
         
         if not history_table:
-            print("警告：歷史匯率表格未找到")
+            log_message("警告：歷史匯率表格未找到")
             return pd.DataFrame(columns=['buy_rate', 'sell_rate'])
             
         history_table = history_table.find(name='tbody').find_all(name='tr')
         
         if not history_table:
-            print("警告：歷史匯率表格行未找到")
+            log_message("警告：歷史匯率表格行未找到")
             return pd.DataFrame(columns=['buy_rate', 'sell_rate'])
 
         # 擷取歷史匯率數據
@@ -323,12 +358,12 @@ def exchange_rate() -> pd.DataFrame:
                     history_buy.append(float(history_ex_rate[0].get_text()))  # 歷史買入匯率
                     history_sell.append(float(history_ex_rate[1].get_text()))  # 歷史賣出匯率
                 except (ValueError, IndexError) as e:
-                    print(f"解析匯率數據時出錯: {e}")
+                    log_message(f"解析匯率數據時出錯: {e}")
                     continue
 
         # 如果沒有獲取到任何數據，返回空的 DataFrame
         if not date_history:
-            print("警告：未獲取到任何匯率歷史數據")
+            log_message("警告：未獲取到任何匯率歷史數據")
             return pd.DataFrame(columns=['buy_rate', 'sell_rate'])
 
         # 將匯率資料建成 DataFrame
@@ -343,11 +378,11 @@ def exchange_rate() -> pd.DataFrame:
 
         return History_ExchangeRate
     except Exception as e:
-        print(f"獲取匯率數據時出錯: {e}")
+        log_message(f"獲取匯率數據時出錯: {e}")
         # 返回空的 DataFrame
         return pd.DataFrame(columns=['buy_rate', 'sell_rate'])
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=7200)
 def futures() -> pd.DataFrame:
     """獲取期貨數據
     
@@ -355,307 +390,127 @@ def futures() -> pd.DataFrame:
         DataFrame: 期貨未平倉數據
     """
     url = 'https://www.taifex.com.tw/cht/3/futContractsDate'
+    
+    # 預設的空 DataFrame
+    default_df = pd.DataFrame({
+        "多空淨額未平倉口數": [0, 0, 0],
+        "多空淨額未平倉契約金額": [0, 0, 0]
+    }, index=["自營商", "投信", "外資"])
 
     try:
         # 使用 requests 先獲取內容
         response = make_request(url)
         
-        # 使用 read_html 解析
-        tables = pd.read_html(StringIO(response.text))
-        
-        # 打印找到的表格數量和每個表格的形狀，幫助調試
-        print(f"找到 {len(tables)} 個表格")
-        for i, table in enumerate(tables):
-            print(f"表格 {i} 形狀: {table.shape}")
-        
-        # 檢查表格數量並處理不同情況
-        if len(tables) <= 2:
-            print(f"警告：只找到 {len(tables)} 個表格，嘗試從現有表格提取數據")
+        # 嘗試方法一：使用 pd.read_html 解析
+        try:
+            tables = pd.read_html(StringIO(response.text))
+            log_message(f"找到 {len(tables)} 個表格")
+            for i, table in enumerate(tables):
+                log_message(f"表格 {i} 形狀: {table.shape}")
             
-            # 嘗試從第一個表格提取數據
-            if len(tables) >= 1:
-                # 獲取第一個表格
-                df = tables[0]
-                print(f"使用表格 0，形狀: {df.shape}")
+            # 檢查表格數量
+            if len(tables) < 1:
+                log_message("未找到任何表格，使用預設數據")
+                return default_df
                 
-                # 從輸出中看出這是一個多層級 header 的表格
-                try:
-                    # 檢查表格是否包含必要的數據
-                    if df.shape[0] > 2 and df.shape[1] > 10:
-                        # 根據輸出了解到表格包含 '臺股期貨' 和 '自營商'、'投信'、'外資' 等關鍵字
-                        
-                        # 嘗試找出自營商、投信和外資的行
-                        filtered_rows = []
-                        
-                        # 遍歷 DataFrame 尋找關鍵字
-                        for i, row in df.iterrows():
-                            row_values = row.astype(str).values
-                            row_text = ' '.join(row_values)
+            # 嘗試找到包含「臺股期貨」的表格
+            target_table = None
+            for i, table in enumerate(tables):
+                if isinstance(table, pd.DataFrame) and not table.empty:
+                    # 將所有列轉換為字符串以進行搜索
+                    table_str = table.astype(str)
+                    if table_str.apply(lambda x: x.str.contains('臺股期貨').any()).any():
+                        log_message(f"表格 {i} 包含臺股期貨資訊")
+                        target_table = table
+                        break
+            
+            if target_table is not None:
+                # 找出包含自營商、投信和外資的行
+                result_df = default_df.copy()  # 先使用預設 DataFrame
+                
+                # 尋找包含三大法人的行
+                for idx, row in target_table.iterrows():
+                    row_str = row.astype(str).str.cat(sep=' ')
+                    
+                    if '自營商' in row_str:
+                        # 尋找倒數第二列和倒數第一列的數值
+                        try:
+                            result_df.loc["自營商", "多空淨額未平倉口數"] = pd.to_numeric(row.iloc[-2], errors='coerce')
+                            result_df.loc["自營商", "多空淨額未平倉契約金額"] = pd.to_numeric(row.iloc[-1], errors='coerce')
+                        except:
+                            pass
                             
-                            # 檢查行是否為臺股期貨加上身份別
-                            if '臺股期貨' in row_text:
-                                if '自營商' in row_text:
-                                    filtered_rows.append(('自營商', row))
-                                elif '投信' in row_text:
-                                    filtered_rows.append(('投信', row))
-                                elif '外資' in row_text:
-                                    filtered_rows.append(('外資', row))
-                        
-                        # 如果找到了所有三種身份別
-                        if len(filtered_rows) > 0:
-                            # 創建新的 DataFrame
-                            result_data = []
+                    elif '投信' in row_str:
+                        try:
+                            result_df.loc["投信", "多空淨額未平倉口數"] = pd.to_numeric(row.iloc[-2], errors='coerce')
+                            result_df.loc["投信", "多空淨額未平倉契約金額"] = pd.to_numeric(row.iloc[-1], errors='coerce')
+                        except:
+                            pass
                             
-                            # 遍歷找到的行
-                            for identity, row in filtered_rows:
-                                # 從右側開始查找未平倉數據
-                                # 根據表格預覽，多空淨額的數據位於最後兩列
-                                positions_value = row.iloc[-2]  # 多空淨額口數
-                                contract_value = row.iloc[-1]   # 多空淨額契約金額
-                                
-                                # 轉換為數值型別
-                                try:
-                                    positions_value = float(positions_value)
-                                except (ValueError, TypeError):
-                                    positions_value = 0
-                                    
-                                try:
-                                    contract_value = float(contract_value)
-                                except (ValueError, TypeError):
-                                    contract_value = 0
-                                
-                                result_data.append([positions_value, contract_value])
-                            
-                            # 建立結果 DataFrame
-                            identities = [item[0] for item in filtered_rows]
-                            result_df = pd.DataFrame(
-                                result_data, 
-                                index=identities,
-                                columns=["多空淨額未平倉口數", "多空淨額未平倉契約金額"]
-                            )
-                            
-                            # 確保包含自營商、投信和外資
-                            for identity in ["自營商", "投信", "外資"]:
-                                if identity not in result_df.index:
-                                    # 添加缺失的身份別
-                                    result_df.loc[identity] = [0, 0]
-                            
-                            # 重新排序索引
-                            result_df = result_df.reindex(["自營商", "投信", "外資"])
-                            
+                    elif '外資' in row_str or '外國人' in row_str:
+                        try:
+                            result_df.loc["外資", "多空淨額未平倉口數"] = pd.to_numeric(row.iloc[-2], errors='coerce')
+                            result_df.loc["外資", "多空淨額未平倉契約金額"] = pd.to_numeric(row.iloc[-1], errors='coerce')
+                        except:
+                            pass
+                
+                return result_df
+            
+            # 嘗試方法二：直接處理第一個足夠大的表格
+            for table in tables:
+                if table.shape[0] > 5 and table.shape[1] > 5:  # 表格足夠大
+                    try:
+                        # 取前三行，假設是三大法人
+                        df = table.head(3)
+                        if df.shape[0] >= 3:
+                            # 假設最後兩列是我們需要的數據
+                            result_df = pd.DataFrame({
+                                "多空淨額未平倉口數": df.iloc[:, -2].values,
+                                "多空淨額未平倉契約金額": df.iloc[:, -1].values
+                            }, index=["自營商", "投信", "外資"])
                             return result_df
-                
-                except Exception as e:
-                    print(f"直接處理表格時出錯: {e}")
-                    # 繼續使用其他方法嘗試
-                
-                try:
-                    # 第二種方法：直接按位置提取
-                    dealer_row = None
-                    invest_row = None
-                    foreign_row = None
-                    
-                    # 尋找包含關鍵字的行
-                    for i, row in df.iterrows():
-                        row_str = ' '.join(row.astype(str).values)
-                        if '臺股期貨' in row_str:
-                            if '自營商' in row_str:
-                                dealer_row = row
-                            elif '投信' in row_str:
-                                invest_row = row
-                            elif '外資' in row_str:
-                                foreign_row = row
-                    
-                    # 如果找到了至少一個關鍵行
-                    if dealer_row is not None or invest_row is not None or foreign_row is not None:
-                        # 創建結果 DataFrame
-                        data = {
-                            "多空淨額未平倉口數": [0, 0, 0],
-                            "多空淨額未平倉契約金額": [0, 0, 0]
-                        }
-                        result_df = pd.DataFrame(data, index=["自營商", "投信", "外資"])
-                        
-                        # 填充找到的數據
-                        if dealer_row is not None:
-                            try:
-                                result_df.loc["自營商", "多空淨額未平倉口數"] = float(dealer_row.iloc[-2])
-                                result_df.loc["自營商", "多空淨額未平倉契約金額"] = float(dealer_row.iloc[-1])
-                            except:
-                                pass
-                        
-                        if invest_row is not None:
-                            try:
-                                result_df.loc["投信", "多空淨額未平倉口數"] = float(invest_row.iloc[-2])
-                                result_df.loc["投信", "多空淨額未平倉契約金額"] = float(invest_row.iloc[-1])
-                            except:
-                                pass
-                        
-                        if foreign_row is not None:
-                            try:
-                                result_df.loc["外資", "多空淨額未平倉口數"] = float(foreign_row.iloc[-2])
-                                result_df.loc["外資", "多空淨額未平倉契約金額"] = float(foreign_row.iloc[-1])
-                            except:
-                                pass
-                        
-                        return result_df
-                
-                except Exception as e:
-                    print(f"按位置提取數據時出錯: {e}")
-                
-                # 從表格預覽看到的結構是有多層級的欄位名稱
-                try:
-                    df_cols = df.columns.tolist()
-                    print(f"列名: {df_cols}")
-                    
-                    # 找出包含 '臺股期貨' 和各個身份別的行
-                    taiwan_futures = df[df.iloc[:, 1].astype(str).str.contains('臺股期貨')]
-                    
-                    if not taiwan_futures.empty:
-                        print(f"找到 {len(taiwan_futures)} 行臺股期貨數據")
-                        
-                        # 識別包含自營商、投信和外資的行
-                        dealer = taiwan_futures[taiwan_futures.iloc[:, 2].astype(str).str.contains('自營商')]
-                        invest = taiwan_futures[taiwan_futures.iloc[:, 2].astype(str).str.contains('投信')]
-                        foreign = taiwan_futures[taiwan_futures.iloc[:, 2].astype(str).str.contains('外資')]
-                        
-                        # 創建結果 DataFrame
-                        data = {
-                            "多空淨額未平倉口數": [0, 0, 0],
-                            "多空淨額未平倉契約金額": [0, 0, 0]
-                        }
-                        result_df = pd.DataFrame(data, index=["自營商", "投信", "外資"])
-                        
-                        # 填充找到的數據
-                        if not dealer.empty:
-                            try:
-                                result_df.loc["自營商", "多空淨額未平倉口數"] = dealer.iloc[0, -2]
-                                result_df.loc["自營商", "多空淨額未平倉契約金額"] = dealer.iloc[0, -1]
-                            except:
-                                pass
-                            
-                        if not invest.empty:
-                            try:
-                                result_df.loc["投信", "多空淨額未平倉口數"] = invest.iloc[0, -2]
-                                result_df.loc["投信", "多空淨額未平倉契約金額"] = invest.iloc[0, -1]
-                            except:
-                                pass
-                            
-                        if not foreign.empty:
-                            try:
-                                result_df.loc["外資", "多空淨額未平倉口數"] = foreign.iloc[0, -2]
-                                result_df.loc["外資", "多空淨額未平倉契約金額"] = foreign.iloc[0, -1]
-                            except:
-                                pass
-                            
-                        return result_df
-                
-                except Exception as e:
-                    print(f"處理多層級表頭時出錯: {e}")
-            
-            # 如果所有嘗試都失敗，返回空的 DataFrame
-            print("所有嘗試均失敗，返回預設數據")
-            data = {
-                "多空淨額未平倉口數": [0, 0, 0],
-                "多空淨額未平倉契約金額": [0, 0, 0]
-            }
-            return pd.DataFrame(data, index=["自營商", "投信", "外資"])
-            
-        # 原來的邏輯，處理找到三個或以上表格的情況
-        df = tables[2]
-        df = df.dropna(how='all', axis=0).dropna(how='all', axis=1)
-
-        # 檢查 DataFrame 是否為空
-        if df.empty:
-            print("警告：期貨數據表格為空")
-            data = {
-                "多空淨額未平倉口數": [0, 0, 0],
-                "多空淨額未平倉契約金額": [0, 0, 0]
-            }
-            return pd.DataFrame(data, index=["自營商", "投信", "外資"])
-
-        # 自訂欄位名稱
-        headers = [
-            "序號", "商品名稱", "身份別",
-            "多方口數", "多方交易契約金額",
-            "空方口數", "空方契約金額",
-            "多空淨額口數", "多空淨額契約金額",
-            "多方未平倉口數", "多方未平倉契約金額",
-            "空方未平倉口數", "空方未平倉契約金額",
-            "多空淨額未平倉口數", "多空淨額未平倉契約金額"
-        ]
-
-        # 檢查 DataFrame 列數是否與標頭數量匹配
-        if len(df.columns) != len(headers):
-            print(f"警告：期貨表格列數 ({len(df.columns)}) 與標頭數量 ({len(headers)}) 不匹配")
-            headers = headers[:len(df.columns)] if len(df.columns) < len(headers) else headers + [f"未知列{i}" for i in range(len(headers), len(df.columns))]
-
-        df.columns = headers
+                    except Exception as e:
+                        log_message(f"處理表格時出錯: {e}")
         
-        # 檢查是否有足夠的行數
-        if len(df) <= 5:
-            print(f"警告：期貨表格只有 {len(df)} 行，期望更多行")
-            data = {
-                "多空淨額未平倉口數": [0, 0, 0],
-                "多空淨額未平倉契約金額": [0, 0, 0]
-            }
-            return pd.DataFrame(data, index=["自營商", "投信", "外資"])
+        except Exception as e:
+            log_message(f"使用 pd.read_html 解析時出錯: {e}")
+        
+        # 嘗試方法三：使用 BeautifulSoup 解析
+        try:
+            soup = BeautifulSoup(response.text, 'lxml')
+            tables = soup.find_all('table')
             
-        df = df[5:].reset_index(drop=True)
-
-        # 安全地處理字符串操作
-        if '序號' in df.columns:
-            # 首先檢查 '序號' 列是否包含字符串類型的值
-            if df['序號'].dtype == 'object':
-                mask = ~df['序號'].str.contains('期貨合計|期貨小計|序 號', na=False)
-                df = df[mask]
-            else:
-                print(f"警告：'序號' 列不是字符串類型，而是 {df['序號'].dtype}")
-        else:
-            print("警告：DataFrame 中沒有 '序號' 列")
-
-        # 檢查 '商品名稱' 列是否存在
-        if '商品名稱' in df.columns:
-            if not df.empty:
-                df = df[df['商品名稱'] == '臺股期貨']
-        else:
-            print("警告：DataFrame 中沒有 '商品名稱' 列")
-
-        # 檢查所需的列是否都存在
-        needed_columns = ["多空淨額未平倉口數", "多空淨額未平倉契約金額"]
-        if all(col in df.columns for col in needed_columns):
-            df = df.loc[:, needed_columns]
-        else:
-            missing_cols = [col for col in needed_columns if col not in df.columns]
-            print(f"警告：缺少必要列：{missing_cols}")
-            data = {
-                "多空淨額未平倉口數": [0, 0, 0],
-                "多空淨額未平倉契約金額": [0, 0, 0]
-            }
-            return pd.DataFrame(data, index=["自營商", "投信", "外資"])
-
-        # 檢查是否有足夠的行數來設置索引
-        if len(df) >= 3:
-            new_index = ["自營商", "投信", "外資"]
-            df = df.head(3)  # 只取前三行
-            df.index = new_index
-        else:
-            print(f"警告：期貨表格只有 {len(df)} 行，無法設置 3 個索引")
-            # 不足 3 行時，創建一個新的 DataFrame
-            data = {
-                "多空淨額未平倉口數": [0, 0, 0],
-                "多空淨額未平倉契約金額": [0, 0, 0]
-            }
-            return pd.DataFrame(data, index=["自營商", "投信", "外資"])
-            
-        return df
+            if tables:
+                for table in tables:
+                    rows = table.find_all('tr')
+                    if len(rows) >= 4:  # 至少需要有足夠的行
+                        data = []
+                        for row in rows[1:4]:  # 跳過標題行，取三大法人
+                            cols = row.find_all('td')
+                            if len(cols) >= 2:
+                                try:
+                                    # 尝试获取最后两列的数据
+                                    net_position = pd.to_numeric(cols[-2].get_text().strip().replace(',', ''), errors='coerce')
+                                    amount = pd.to_numeric(cols[-1].get_text().strip().replace(',', ''), errors='coerce')
+                                    data.append([net_position, amount])
+                                except:
+                                    data.append([0, 0])
+                        
+                        if len(data) == 3:
+                            result_df = pd.DataFrame(data, columns=["多空淨額未平倉口數", "多空淨額未平倉契約金額"], 
+                                                  index=["自營商", "投信", "外資"])
+                            return result_df
+        
+        except Exception as e:
+            log_message(f"使用 BeautifulSoup 解析時出錯: {e}")
+        
+        # 如果所有方法都失敗，返回預設數據
+        log_message("所有解析方法均失敗，返回預設數據")
+        return default_df
+        
     except Exception as e:
-        print(f"獲取期貨數據時發生錯誤: {e}")
-        # 返回一個包含數據的 DataFrame
-        data = {
-            "多空淨額未平倉口數": [0, 0, 0],
-            "多空淨額未平倉契約金額": [0, 0, 0]
-        }
-        return pd.DataFrame(data, index=["自營商", "投信", "外資"])
+        log_message(f"獲取期貨數據時發生錯誤: {e}")
+        return default_df
 
 def format_number(num_str: str) -> float:
     """格式化數字字符串為浮點數
@@ -672,12 +527,12 @@ def format_number(num_str: str) -> float:
         num_rounded = round(num_float / 1e8, 1)
         return num_rounded
     except (ValueError, AttributeError) as e:
-        print(f"格式化數字時出錯: {e}, 輸入: {num_str}")
+        log_message(f"格式化數字時出錯: {e}, 輸入: {num_str}")
         return 0.0
 
 @st.cache_data(ttl=86400)
 def get_stock_history(stock_id: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """獲取指定股票的歷史行情數據，使用yfinance庫
+    """獲取指定股票的歷史行情數據，優先使用 yfinance 庫，如果 yfinance 失敗則嘗試使用 TWSE API
     
     Args:
         stock_id: 股票代碼，例如 "2330"
@@ -687,124 +542,130 @@ def get_stock_history(stock_id: str, start_date: str, end_date: str) -> pd.DataF
     Returns:
         DataFrame: 股票歷史數據，包含日期、開盤價、最高價、最低價、收盤價、成交量等
     """
+    # 第一种方法：使用 yfinance
     try:
-        print(f"使用yfinance獲取 {stock_id} 從 {start_date} 到 {end_date} 的歷史數據")
+        log_message(f"使用yfinance獲取 {stock_id} 從 {start_date} 到 {end_date} 的歷史數據")
         
-        # 轉換台灣股票代碼為Yahoo格式 (添加.TW後綴)
-        yahoo_stock_id = f"{stock_id}.TW"
+        # 轉換台灣股票代碼為Yahoo格式 (添加.TW或.TWO後綴)
+        if not stock_id.endswith('.TW') and not stock_id.endswith('.TWO'):
+            # 判斷是上市還是上櫃
+            if len(stock_id) == 4 and stock_id.startswith('6'):
+                yahoo_stock_id = f"{stock_id}.TWO"  # 上櫃股票
+            else:
+                yahoo_stock_id = f"{stock_id}.TW"   # 上市股票
+        else:
+            yahoo_stock_id = stock_id
         
         # 使用yfinance下載數據
         stock_data = yf.download(
             tickers=yahoo_stock_id,
             start=start_date,
             end=end_date,
-            progress=False
+            progress=False,
+            timeout=15
         )
         
         # 檢查是否成功獲取數據
-        if stock_data.empty:
-            print(f"無法從yfinance獲取 {stock_id} 的數據")
-            return pd.DataFrame()
-        
-        # 重命名列以匹配原有函數的輸出格式
-        stock_data.rename(columns={
-            'Open': '開盤價',
-            'High': '最高價',
-            'Low': '最低價',
-            'Close': '收盤價',
-            'Volume': '成交股數',
-            'Adj Close': '調整後收盤價'
-        }, inplace=True)
-        
-        # 添加一些原始函數可能返回的其他列
-        stock_data['成交金額'] = stock_data['收盤價'] * stock_data['成交股數']
-        stock_data['成交筆數'] = np.nan  # yfinance沒有提供這一數據
-        
-        # 按日期排序
-        stock_data.sort_index(inplace=True)
-        
-        return stock_data
-    
+        if not stock_data.empty:
+            log_message(f"成功從yfinance獲取 {stock_id} 的數據，共 {len(stock_data)} 條記錄")
+            
+            # 重命名列以匹配原有函數的輸出格式
+            stock_data.rename(columns={
+                'Open': '開盤價',
+                'High': '最高價',
+                'Low': '最低價',
+                'Close': '收盤價',
+                'Volume': '成交股數',
+                'Adj Close': '調整後收盤價'
+            }, inplace=True)
+            
+            # 添加一些原始函數可能返回的其他列
+            stock_data['成交金額'] = stock_data['收盤價'] * stock_data['成交股數']
+            stock_data['成交筆數'] = np.nan  # yfinance沒有提供這一數據
+            
+            # 按日期排序
+            stock_data.sort_index(inplace=True)
+            
+            return stock_data
+        else:
+            log_message(f"從yfinance獲取的 {stock_id} 數據為空，嘗試其他方法")
     except Exception as e:
-        print(f"使用yfinance獲取 {stock_id} 的歷史數據時發生錯誤: {e}")
+        log_message(f"使用yfinance獲取數據時出錯: {str(e)}，嘗試其他方法")
+    
+    # 第二种方法：使用台湾证券交易所 API (如果 yfinance 失败)
+    try:
+        log_message(f"嘗試從TWSE獲取 {stock_id} 的歷史數據")
         
-        # 如果yfinance失敗，嘗試使用原始的獲取方法
-        print("嘗試使用原始方法獲取數據...")
-        try:
-            # 轉換日期格式從 "YYYY-MM-DD" 到 "YYYYMMDD"
-            start_date_fmt = start_date.replace("-", "")
-            end_date_fmt = end_date.replace("-", "")
+        # 解析日期
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+        
+        # 初始化結果 DataFrame
+        result_df = pd.DataFrame()
+        
+        # 逐月獲取數據
+        current_date = start_date_obj
+        
+        while current_date <= end_date_obj:
+            year = current_date.year
+            month = current_date.month
             
-            # 計算時間範圍內的月份列表
-            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+            # 構建月份的數據請求
+            url = f"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date={year}{month:02d}01&stockNo={stock_id}&response=json"
+            log_message(f"請求月度數據: {url}")
             
-            # 初始化一個空的 DataFrame 用於存儲結果
-            result_df = pd.DataFrame()
-            
-            # 按月請求數據
-            current_date = start_date_obj
-            while current_date <= end_date_obj:
-                year = current_date.year
-                month = current_date.month
+            try:
+                response = make_request(url)
+                data = response.json()
                 
-                # 構建月份的數據請求
-                url = f"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date={year}{month:02d}01&stockNo={stock_id}&response=json"
-                print(f"請求月度數據: {url}")
-                
-                try:
-                    response = make_request(url)
-                    data = response.json()
-                    
-                    if data["stat"] == "OK" and "data" in data:
-                        # 將月度數據添加到結果中
-                        month_df = pd.DataFrame(data["data"], columns=data["fields"])
-                        result_df = pd.concat([result_df, month_df])
-                    else:
-                        print(f"無法獲取 {year}年{month}月 的數據，狀態: {data.get('stat', 'N/A')}")
-                    
-                    # 每次請求後等待一下，避免頻繁請求被封
-                    time.sleep(0.5)
-                
-                except Exception as e:
-                    print(f"獲取 {year}年{month}月 的數據時出錯: {e}")
-                
-                # 移動到下一個月
-                if month == 12:
-                    year += 1
-                    month = 1
+                if data["stat"] == "OK" and "data" in data:
+                    # 將月度數據添加到結果中
+                    month_df = pd.DataFrame(data["data"], columns=data["fields"])
+                    result_df = pd.concat([result_df, month_df])
                 else:
-                    month += 1
-                current_date = datetime(year, month, 1)
+                    log_message(f"無法獲取 {year}年{month}月 的數據，狀態: {data.get('stat', 'N/A')}")
+                
+                # 每次請求後等待一下，避免頻繁請求被封
+                time.sleep(0.5)
             
-            # 處理數據格式
-            if not result_df.empty:
-                # 將日期列轉換為西元格式
-                result_df['日期'] = result_df['日期'].apply(lambda x: convert_tw_date(x))
-                
-                # 確保數據按日期排序
-                result_df = result_df.sort_values('日期')
-                
-                # 將數值型列轉換為數值類型
-                numeric_columns = ['開盤價', '最高價', '最低價', '收盤價', '成交股數', '成交金額', '成交筆數']
-                for col in numeric_columns:
-                    if col in result_df.columns:
-                        result_df[col] = result_df[col].str.replace(',', '').astype(float)
-                
-                # 設置日期為索引
-                result_df.set_index('日期', inplace=True)
-                
-                # 過濾指定日期範圍內的數據
-                result_df = result_df[(result_df.index >= start_date) & (result_df.index <= end_date)]
-                
-                return result_df
+            except Exception as e:
+                log_message(f"獲取 {year}年{month}月 的數據時出錯: {e}")
+            
+            # 移動到下一個月
+            if month == 12:
+                year += 1
+                month = 1
             else:
-                print(f"獲取 {stock_id} 的歷史數據時未返回任何結果")
-                return pd.DataFrame()
-                
-        except Exception as backup_error:
-            print(f"備用方法也失敗: {backup_error}")
-            return pd.DataFrame()
+                month += 1
+            current_date = datetime(year, month, 1)
+        
+        # 處理數據類型
+        if not result_df.empty:
+            # 轉換日期
+            result_df['日期'] = result_df['日期'].apply(convert_tw_date)
+            
+            # 轉換數字類型
+            for col in ['開盤價', '最高價', '最低價', '收盤價']:
+                result_df[col] = result_df[col].str.replace(',', '').astype(float)
+            
+            for col in ['成交股數', '成交金額', '成交筆數']:
+                result_df[col] = result_df[col].str.replace(',', '').astype(float)
+            
+            # 設置日期為索引
+            result_df['日期'] = pd.to_datetime(result_df['日期'])
+            result_df.set_index('日期', inplace=True)
+            
+            # 按日期排序
+            result_df.sort_index(inplace=True)
+            
+            log_message(f"成功從TWSE獲取 {stock_id} 的數據，共 {len(result_df)} 條記錄")
+            return result_df
+    except Exception as e:
+        log_message(f"從TWSE獲取 {stock_id} 的歷史數據時出錯: {e}")
+    
+    # 如果所有方法都失敗，返回空 DataFrame
+    log_message(f"無法獲取 {stock_id} 的歷史數據")
+    return pd.DataFrame()
 
 def convert_tw_date(tw_date: str) -> str:
     """將台灣日期格式 (民國年/月/日) 轉換為西元年格式 (YYYY-MM-DD)
@@ -824,7 +685,7 @@ def convert_tw_date(tw_date: str) -> str:
             return f"{year}-{month}-{day}"
         return tw_date
     except Exception as e:
-        print(f"日期轉換錯誤: {e}, 輸入: {tw_date}")
+        log_message(f"日期轉換錯誤: {e}, 輸入: {tw_date}")
         return tw_date
 
 @st.cache_data(ttl=86400)
@@ -839,7 +700,7 @@ def get_stock_info(stock_id: str) -> dict:
     """
     try:
         # 從台灣證交所獲取股票基本信息
-        url = f"        https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date=20240301&stockNo={stock_id}"
+        url = f"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date=20240301&stockNo={stock_id}&response=json"
         response = make_request(url)
         data = response.json()
         
@@ -847,17 +708,17 @@ def get_stock_info(stock_id: str) -> dict:
             info = data["data"][0]
             stock_info = {
                 "股票代號": stock_id,
-                "股票名稱": info[1] if len(info) > 1 else "未知",
-                "產業別": info[2] if len(info) > 2 else "未知",
-                "上市日期": info[3] if len(info) > 3 else "未知"
+                "股票名稱": info[0] if len(info) > 0 else "未知",
+                "產業別": "未知",  # STOCK_DAY API 不提供產業別信息
+                "上市日期": "未知"  # STOCK_DAY API 不提供上市日期信息
             }
             return stock_info
         else:
-            print(f"無法獲取股票 {stock_id} 的基本信息")
+            log_message(f"無法獲取股票 {stock_id} 的基本信息")
             return {"股票代號": stock_id, "股票名稱": "未知", "產業別": "未知", "上市日期": "未知"}
     
     except Exception as e:
-        print(f"獲取股票 {stock_id} 的基本信息時發生錯誤: {e}")
+        log_message(f"獲取股票 {stock_id} 的基本信息時發生錯誤: {e}")
         return {"股票代號": stock_id, "股票名稱": "未知", "產業別": "未知", "上市日期": "未知"}
 
 @st.cache_data(ttl=86400)
@@ -938,7 +799,7 @@ def calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         return result_df
     
     except Exception as e:
-        print(f"計算技術指標時發生錯誤: {e}")
+        log_message(f"計算技術指標時發生錯誤: {e}")
         return df
 
 @st.cache_data(ttl=86400)
@@ -1293,3 +1154,27 @@ def backtest_strategy(df: pd.DataFrame, strategy: str, params: dict, initial_cap
         }
     
     return trades_df, backtest_results, portfolio_df
+
+def exception_handler(default_return=None):
+    """異常處理裝飾器
+    
+    Args:
+        default_return: 出現異常時的默認返回值
+        
+    Returns:
+        裝飾後的函數
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                # 獲取函數名稱
+                func_name = func.__name__
+                # 記錄錯誤
+                log_message(f"執行 {func_name} 時發生錯誤: {str(e)}", level="error")
+                # 返回默認值
+                return default_return
+        return wrapper
+    return decorator
