@@ -486,8 +486,8 @@ def main():
             # 確保表單提交後保持在交易回測頁面
             if submit_button:
                 st.session_state.active_tab = "交易回測"
-                # 設置查詢參數以在重新加載頁面後維持在交易回測頁面
-                st.query_params["tab"] = "交易回測"
+                # 使用正確的方式設置查詢參數
+                st.experimental_set_query_params(tab="交易回測")
         
         # 如果表單被提交
         if submit_button:
