@@ -1,7 +1,14 @@
+import os
+import sys
+
 import streamlit as st
 import pandas as pd
 from data import *
 import plotly.graph_objects as go
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from stock_core import fetch_00631L, fetch_TWII, analyze_right, analyze_panic
+
 st.set_page_config(layout="wide")
 
 def main():
